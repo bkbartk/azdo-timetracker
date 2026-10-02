@@ -22,41 +22,39 @@
       <input type="date" id="dateTo">
     </div>
     <div class="filter-group">
-      <label for="userFilter">User</label>
-      <select id="userFilter">
-        <option value="">All Users</option>
-      </select>
+      <label>User</label>
+      <div class="ms" id="userFilter" data-all="All Users"></div>
     </div>
     <div class="filter-group">
-      <label for="epicFilter">Epic</label>
-      <select id="epicFilter">
-        <option value="">All Epics</option>
-      </select>
+      <label>Epic</label>
+      <div class="ms" id="epicFilter" data-all="All Epics"></div>
     </div>
     <div class="filter-group">
-      <label for="projectFilter">Project</label>
-      <select id="projectFilter">
-        <option value="">All Projects</option>
-      </select>
+      <label>Project</label>
+      <div class="ms" id="projectFilter" data-all="All Projects"></div>
     </div>
     <div class="filter-group">
-      <label for="clientFilter">Client</label>
-      <select id="clientFilter">
-        <option value="">All Clients</option>
-      </select>
+      <label>Client</label>
+      <div class="ms" id="clientFilter" data-all="All Clients"></div>
     </div>
     <div class="filter-group">
-      <label for="tagFilter">Tag</label>
-      <select id="tagFilter">
-        <option value="">All Tags</option>
-      </select>
+      <label>Tag</label>
+      <div class="ms" id="tagFilter" data-all="All Tags"></div>
     </div>
     <div class="btn-group">
-      <button onclick="loadAllEntries()">Apply Filters</button>
-      <button class="secondary" onclick="clearFilters()">Clear</button>
-      <button class="secondary" onclick="exportCSV()">Export CSV</button>
-      <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
-      <button id="resyncBtn" class="danger" onclick="resyncAll()" style="display:none">Re-sync</button>
+      <button class="icon-btn toolbar-btn" onclick="clearFilters()" title="Clear filters" aria-label="Clear filters">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon><line x1="16" y1="16" x2="22" y2="22"></line><line x1="22" y1="16" x2="16" y2="22"></line></svg>
+      </button>
+      <button class="icon-btn toolbar-btn" onclick="exportCSV()" title="Export CSV" aria-label="Export CSV">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      </button>
+      <button class="icon-btn toolbar-btn" onclick="exportBackupJSON()" title="Backup JSON" aria-label="Backup JSON">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+      </button>
+      <button id="resyncBtn" class="icon-btn toolbar-btn resync-btn" onclick="resyncAll()" title="Re-sync tags, parent and epic from Azure DevOps (admin)" aria-label="Re-sync" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        <span id="resyncProgress"></span>
+      </button>
     </div>
     <div class="filters-add">
       <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
@@ -229,11 +227,6 @@
         alert('No entries in current filter to update.');
         return;
       }
-      if (!confirm('Re-sync tags, parent and epic for ' + filteredEntries.length + ' filtered entries from Azure DevOps?')) return;
-
-      var btn = document.getElementById('resyncBtn');
-      btn.disabled = true;
-
       // Deduplicate by workItemId — fetch each work item once
       var byWorkItem = {};
       filteredEntries.forEach(function(e) {
@@ -242,6 +235,13 @@
       });
       var workItemIds = Object.keys(byWorkItem);
       var total = workItemIds.length;
+      var failed = [];
+
+      if (!confirm('Re-sync tags, parent and epic for ' + filteredEntries.length + ' filtered entries (' + total + ' unique work items) from Azure DevOps?')) return;
+
+      var btn = document.getElementById('resyncBtn');
+      var progress = document.getElementById('resyncProgress');
+      btn.disabled = true;
       var done = 0;
       var entryUpdates = [];
       var metaByWorkItem = {};
@@ -257,14 +257,17 @@
               byWorkItem[wiId].forEach(function(e) {
                 entryUpdates.push({ id: e.id, date: e.date, updates: meta });
               });
-            }).catch(function() {}).then(function() {
+            }).catch(function(err) {
+              console.warn('[TimeReport] Re-sync failed for work item ' + wiId, err);
+              failed.push(wiId);
+            }).then(function() {
               done++;
-              btn.textContent = 'Re-syncing... ' + done + '/' + total;
+              progress.textContent = done + '/' + total;
             });
           })).then(function() { return processBatch(rest); });
         }
 
-        btn.textContent = 'Re-syncing... 0/' + total;
+        progress.textContent = '0/' + total;
         return processBatch(workItemIds).then(function() {
           return batchUpdateEntries(entryUpdates);
         }).then(function() {
@@ -283,12 +286,15 @@
           return TC.recalcTotalHours(window.dataService, witClient, touchedEntries);
         }).then(function() {
           btn.disabled = false;
-          btn.textContent = 'Re-sync';
+          progress.textContent = '';
+          var msg = 'Re-synced ' + entryUpdates.length + ' of ' + filteredEntries.length + ' entries (' + (total - failed.length) + '/' + total + ' work items).';
+          if (failed.length) msg += '\n\nCould not fetch work items (deleted or no access?): ' + failed.join(', ');
+          alert(msg);
           return loadAllEntries();
         });
       }).catch(function(err) {
         btn.disabled = false;
-        btn.textContent = 'Re-sync';
+        progress.textContent = '';
         alert('Re-sync failed: ' + err.message);
       });
     }
@@ -316,21 +322,22 @@
 
     function parseHashString(hash) {
       if (!hash) return null;
+      // Values stay encoded here: multi-select filters are a comma-joined
+      // list of individually encoded values, so split before decoding.
       var raw = {};
       hash.split("&").forEach(function(pair) {
         var idx = pair.indexOf("=");
-        if (idx > 0) raw[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+        if (idx > 0) raw[decodeURIComponent(pair.slice(0, idx))] = pair.slice(idx + 1);
       });
       if (!Object.keys(raw).length) return null;
+      function list(v) { return v.split(",").filter(Boolean).map(decodeURIComponent); }
       // Map URL-friendly names to internal filter keys
       var params = {};
-      if (raw.startdate) params.dateFrom = raw.startdate;
-      if (raw.enddate)   params.dateTo   = raw.enddate;
-      if (raw.user)      params.user     = raw.user;
-      if (raw.epic)      params.epic     = raw.epic;
-      if (raw.project)   params.project  = raw.project;
-      if (raw.client)    params.client   = raw.client;
-      if (raw.tag)       params.tag      = raw.tag;
+      if (raw.startdate) params.dateFrom = decodeURIComponent(raw.startdate);
+      if (raw.enddate)   params.dateTo   = decodeURIComponent(raw.enddate);
+      ["user", "epic", "project", "client", "tag"].forEach(function(k) {
+        if (raw[k]) params[k] = list(raw[k]);
+      });
       return Object.keys(params).length ? params : null;
     }
 
@@ -341,8 +348,8 @@
       if (dateFrom) parts.push("startdate=" + encodeURIComponent(dateFrom));
       if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
       [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"]].forEach(function(pair) {
-        var v = document.getElementById(pair[0]).value;
-        if (v) parts.push(pair[1] + "=" + encodeURIComponent(v));
+        var v = msGetValues(pair[0]);
+        if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
       });
       var hashStr = parts.join("&");
       VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
@@ -402,13 +409,7 @@
             } catch(e) {}
             try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
 
-            // Set default date range (last 30 days)
-            var today = new Date();
-            var thirtyDaysAgo = new Date(today);
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-            document.getElementById("dateTo").valueAsDate = today;
-            document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
+            setDefaultDateRange();
 
             console.log("[TimeReport] Running migration check...");
             function startLoad() {
@@ -438,6 +439,101 @@
           console.error("[TimeReport] Error in VSS.ready:", err);
         }
       });
+    }
+
+    // Default date range: current week (Mon..Sun)
+    function setDefaultDateRange() {
+      var week = TC.weekDates();
+      document.getElementById("dateFrom").value = week[0];
+      document.getElementById("dateTo").value = week[6];
+    }
+
+    // Filters apply immediately. Dates change which months are loaded,
+    // so they reload; the dropdowns filter the already-loaded entries.
+    ["dateFrom", "dateTo"].forEach(function(id) {
+      document.getElementById(id).addEventListener("change", function() {
+        if (window.dataService) loadAllEntries();
+      });
+    });
+    ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+      msInit(id, applyFilters);
+    });
+
+    // ---- Multi-select dropdown -------------------------------------
+    // <div class="ms" id="..." data-all="All X"></div>. No selection = all.
+    function msInit(id, onChange) {
+      var root = document.getElementById(id);
+      root.innerHTML = '<div class="ms-trigger" tabindex="0"></div><div class="ms-panel"></div>';
+      root._ms = { options: [], selected: {}, onChange: onChange };
+      var trigger = root.querySelector(".ms-trigger");
+      trigger.addEventListener("click", function() { msToggle(root); });
+      trigger.addEventListener("keydown", function(ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); msToggle(root); }
+        if (ev.key === "Escape") root.classList.remove("open");
+      });
+      root.querySelector(".ms-panel").addEventListener("change", function(ev) {
+        var cb = ev.target;
+        if (cb.dataset.all !== undefined) {
+          root._ms.selected = {};
+        } else if (cb.checked) {
+          root._ms.selected[cb.value] = true;
+        } else {
+          delete root._ms.selected[cb.value];
+        }
+        msRender(root);
+        root._ms.onChange();
+      });
+      msRender(root);
+    }
+
+    function msToggle(root) {
+      var wasOpen = root.classList.contains("open");
+      document.querySelectorAll(".ms.open").forEach(function(el) { el.classList.remove("open"); });
+      if (!wasOpen) root.classList.add("open");
+    }
+
+    document.addEventListener("click", function(ev) {
+      document.querySelectorAll(".ms.open").forEach(function(el) {
+        if (!el.contains(ev.target)) el.classList.remove("open");
+      });
+    });
+
+    // options: [{value, label}]; selected values not in options are dropped.
+    function msSetOptions(id, options, selectedValues) {
+      var root = document.getElementById(id);
+      var valid = {};
+      options.forEach(function(o) { valid[o.value] = true; });
+      root._ms.options = options;
+      root._ms.selected = {};
+      (selectedValues || []).forEach(function(v) { if (valid[v]) root._ms.selected[v] = true; });
+      msRender(root);
+    }
+
+    function msGetValues(id) {
+      return Object.keys(document.getElementById(id)._ms.selected);
+    }
+
+    function msRender(root) {
+      var st = root._ms;
+      var values = Object.keys(st.selected);
+      var label = root.dataset.all;
+      if (values.length === 1) {
+        var opt = st.options.find(function(o) { return o.value === values[0]; });
+        label = opt ? opt.label : values[0];
+      } else if (values.length > 1) {
+        label = values.length + " selected";
+      }
+      var trigger = root.querySelector(".ms-trigger");
+      trigger.textContent = label;
+      trigger.title = values.length > 1
+        ? st.options.filter(function(o) { return st.selected[o.value]; }).map(function(o) { return o.label; }).join(", ")
+        : label;
+      root.querySelector(".ms-panel").innerHTML =
+        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (values.length ? '' : ' checked') + '> ' + escapeHtml(root.dataset.all) + '</label>' +
+        st.options.map(function(o) {
+          return '<label class="ms-option"><input type="checkbox" value="' + escapeHtml(o.value).replace(/"/g, "&quot;") + '"' +
+            (st.selected[o.value] ? ' checked' : '') + '> ' + escapeHtml(o.label) + '</label>';
+        }).join("");
     }
 
     // Start initialization
@@ -540,64 +636,37 @@
     }
 
     function populateFilters() {
-      // Save current selections (use pendingFilters from hash on first load)
+      // Keep current selections (use pendingFilters from hash on first load)
       var pf = pendingFilters;
       pendingFilters = null;
-      var savedUser    = pf && pf.user    !== undefined ? pf.user    : document.getElementById("userFilter").value;
-      var savedEpic    = pf && pf.epic    !== undefined ? pf.epic    : document.getElementById("epicFilter").value;
-      var savedProject = pf && pf.project !== undefined ? pf.project : document.getElementById("projectFilter").value;
-      var savedClient  = pf && pf.client  !== undefined ? pf.client  : document.getElementById("clientFilter").value;
-      var savedTag     = pf && pf.tag     !== undefined ? pf.tag     : document.getElementById("tagFilter").value;
+      function saved(key, id) { return pf && pf[key] !== undefined ? pf[key] : msGetValues(id); }
+      function setGroup(id, options, key, visible) {
+        msSetOptions(id, options, saved(key, id));
+        document.getElementById(id).closest('.filter-group').style.display = visible ? '' : 'none';
+      }
+      function plain(v) { return { value: v, label: v }; }
 
       // Unique users
-      var users = [...new Set(allEntries.map(e => JSON.stringify({id: e.userId, name: e.userName})))];
-      var userSelect = document.getElementById("userFilter");
-      userSelect.innerHTML = '<option value="">All Users</option>';
-      users.forEach(function(u) {
-        var user = JSON.parse(u);
-        var opt = document.createElement("option");
-        opt.value = user.id;
-        opt.textContent = user.name;
-        userSelect.appendChild(opt);
-      });
-      userSelect.closest('.filter-group').style.display = users.length > 1 ? '' : 'none';
+      var users = {};
+      allEntries.forEach(function(e) { if (!users[e.userId]) users[e.userId] = e.userName; });
+      var userOpts = Object.keys(users).map(function(id) { return { value: id, label: users[id] }; })
+        .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
+      setGroup("userFilter", userOpts, "user", userOpts.length > 1);
 
       // Unique epics
-      var epics = [...new Set(allEntries.filter(e => e.epicId).map(e => JSON.stringify({id: e.epicId, title: e.epicTitle})))];
-      var epicSelect = document.getElementById("epicFilter");
-      epicSelect.innerHTML = '<option value="">All Epics</option>';
-      epics.forEach(function(ep) {
-        var epic = JSON.parse(ep);
-        var opt = document.createElement("option");
-        opt.value = epic.id;
-        opt.textContent = epic.title;
-        epicSelect.appendChild(opt);
-      });
-      epicSelect.closest('.filter-group').style.display = epics.length > 0 ? '' : 'none';
+      var epics = {};
+      allEntries.forEach(function(e) { if (e.epicId && !epics[e.epicId]) epics[e.epicId] = e.epicTitle; });
+      var epicOpts = Object.keys(epics).map(function(id) { return { value: id, label: epics[id] || ('#' + id) }; })
+        .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
+      setGroup("epicFilter", epicOpts, "epic", epicOpts.length > 0);
 
       // Unique projects
-      var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))];
-      var projectSelect = document.getElementById("projectFilter");
-      projectSelect.innerHTML = '<option value="">All Projects</option>';
-      projects.sort().forEach(function(proj) {
-        var opt = document.createElement("option");
-        opt.value = proj;
-        opt.textContent = proj;
-        projectSelect.appendChild(opt);
-      });
-      projectSelect.closest('.filter-group').style.display = projects.some(function(p) { return p !== '(No Project)'; }) ? '' : 'none';
+      var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))].sort();
+      setGroup("projectFilter", projects.map(plain), "project", projects.some(function(p) { return p !== '(No Project)'; }));
 
       // Unique clients
-      var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))];
-      var clientSelect = document.getElementById("clientFilter");
-      clientSelect.innerHTML = '<option value="">All Clients</option>';
-      clients.sort().forEach(function(cli) {
-        var opt = document.createElement("option");
-        opt.value = cli;
-        opt.textContent = cli;
-        clientSelect.appendChild(opt);
-      });
-      clientSelect.closest('.filter-group').style.display = clients.some(function(c) { return c !== '(No Client)'; }) ? '' : 'none';
+      var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))].sort();
+      setGroup("clientFilter", clients.map(plain), "client", clients.some(function(c) { return c !== '(No Client)'; }));
 
       // Unique tags
       var allTags = new Set();
@@ -609,41 +678,34 @@
           });
         }
       });
-      var tagSelect = document.getElementById("tagFilter");
-      tagSelect.innerHTML = '<option value="">All Tags</option>';
-      [...allTags].sort().forEach(function(tag) {
-        var opt = document.createElement("option");
-        opt.value = tag;
-        opt.textContent = tag;
-        tagSelect.appendChild(opt);
-      });
-      tagSelect.closest('.filter-group').style.display = allTags.size > 0 ? '' : 'none';
-
-      // Restore selections after rebuild
-      document.getElementById("userFilter").value    = savedUser;
-      document.getElementById("epicFilter").value    = savedEpic;
-      document.getElementById("projectFilter").value = savedProject;
-      document.getElementById("clientFilter").value  = savedClient;
-      document.getElementById("tagFilter").value     = savedTag;
+      setGroup("tagFilter", [...allTags].sort().map(plain), "tag", allTags.size > 0);
     }
 
     function applyFilters() {
       var dateFrom = document.getElementById("dateFrom").value;
       var dateTo = document.getElementById("dateTo").value;
-      var userId = document.getElementById("userFilter").value;
-      var epicId = document.getElementById("epicFilter").value;
-      var project = document.getElementById("projectFilter").value;
-      var client = document.getElementById("clientFilter").value;
-      var tag = document.getElementById("tagFilter").value;
+      function set(id) {
+        var s = {};
+        msGetValues(id).forEach(function(v) { s[v] = true; });
+        return Object.keys(s).length ? s : null;
+      }
+      var users = set("userFilter");
+      var epics = set("epicFilter");
+      var projects = set("projectFilter");
+      var clients = set("clientFilter");
+      var tags = msGetValues("tagFilter").map(function(t) { return t.toLowerCase(); });
 
       filteredEntries = allEntries.filter(function(e) {
         if (dateFrom && e.date < dateFrom) return false;
         if (dateTo && e.date > dateTo) return false;
-        if (userId && e.userId !== userId) return false;
-        if (epicId && String(e.epicId) !== String(epicId)) return false;
-        if (project && (e.project || "(No Project)") !== project) return false;
-        if (client && (e.client || "(No Client)") !== client) return false;
-        if (tag && (!e.tags || !e.tags.toLowerCase().includes(tag.toLowerCase()))) return false;
+        if (users && !users[e.userId]) return false;
+        if (epics && !epics[String(e.epicId)]) return false;
+        if (projects && !projects[e.project || "(No Project)"]) return false;
+        if (clients && !clients[e.client || "(No Client)"]) return false;
+        if (tags.length) {
+          var entryTags = (e.tags || "").split(";").map(function(t) { return t.trim().toLowerCase(); });
+          if (!tags.some(function(t) { return entryTags.indexOf(t) !== -1; })) return false;
+        }
         return true;
       });
 
@@ -653,19 +715,11 @@
     }
 
     function clearFilters() {
-      var today = new Date();
-      var thirtyDaysAgo = new Date(today);
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      document.getElementById("dateTo").valueAsDate = today;
-      document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
-      document.getElementById("userFilter").value = "";
-      document.getElementById("epicFilter").value = "";
-      document.getElementById("projectFilter").value = "";
-      document.getElementById("clientFilter").value = "";
-      document.getElementById("tagFilter").value = "";
-      
-      applyFilters();
+      setDefaultDateRange();
+      ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+        document.getElementById(id)._ms.selected = {};
+      });
+      loadAllEntries();
     }
 
     function updateSummary() {
