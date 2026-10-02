@@ -349,7 +349,8 @@
       if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
       [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"]].forEach(function(pair) {
         var v = msGetValues(pair[0]);
-        if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
+        if (v === null) { if (pair[1] === "user") parts.push("user=*"); }
+        else if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
       });
       var hashStr = parts.join("&");
       VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
@@ -429,6 +430,8 @@
                   if (hashFilters.dateTo)   document.getElementById("dateTo").value   = hashFilters.dateTo;
                   pendingFilters = hashFilters;
                 }
+                pendingFilters = pendingFilters || {};
+                if (pendingFilters.user === undefined) pendingFilters.user = defaultUserSelection();
                 startLoad();
               }, startLoad);
             }, startLoad);
@@ -439,6 +442,11 @@
           console.error("[TimeReport] Error in VSS.ready:", err);
         }
       });
+    }
+
+    // Default user filter: the logged-in user
+    function defaultUserSelection() {
+      return currentUser ? [String(currentUser.id)] : null;
     }
 
     // Default date range: current week (Mon..Sun)
@@ -460,11 +468,13 @@
     });
 
     // ---- Multi-select dropdown -------------------------------------
-    // <div class="ms" id="..." data-all="All X"></div>. No selection = all.
+    // <div class="ms" id="..." data-all="All X"></div>.
+    // selected === null means all (every box ticked, no filtering);
+    // otherwise it is the explicit set of ticked values (may be empty).
     function msInit(id, onChange) {
       var root = document.getElementById(id);
       root.innerHTML = '<div class="ms-trigger" tabindex="0"></div><div class="ms-panel"></div>';
-      root._ms = { options: [], selected: {}, onChange: onChange };
+      root._ms = { options: [], selected: null, onChange: onChange };
       var trigger = root.querySelector(".ms-trigger");
       trigger.addEventListener("click", function() { msToggle(root); });
       trigger.addEventListener("keydown", function(ev) {
@@ -472,13 +482,17 @@
         if (ev.key === "Escape") root.classList.remove("open");
       });
       root.querySelector(".ms-panel").addEventListener("change", function(ev) {
-        var cb = ev.target;
+        var cb = ev.target, st = root._ms;
         if (cb.dataset.all !== undefined) {
-          root._ms.selected = {};
-        } else if (cb.checked) {
-          root._ms.selected[cb.value] = true;
+          st.selected = cb.checked ? null : {};
         } else {
-          delete root._ms.selected[cb.value];
+          if (st.selected === null) {
+            st.selected = {};
+            st.options.forEach(function(o) { st.selected[o.value] = true; });
+          }
+          if (cb.checked) st.selected[cb.value] = true;
+          else delete st.selected[cb.value];
+          msNormalize(st);
         }
         msRender(root);
         root._ms.onChange();
@@ -498,26 +512,45 @@
       });
     });
 
-    // options: [{value, label}]; selected values not in options are dropped.
-    function msSetOptions(id, options, selectedValues) {
-      var root = document.getElementById(id);
-      var valid = {};
-      options.forEach(function(o) { valid[o.value] = true; });
-      root._ms.options = options;
-      root._ms.selected = {};
-      (selectedValues || []).forEach(function(v) { if (valid[v]) root._ms.selected[v] = true; });
-      msRender(root);
+    // Every option ticked is the same as "all".
+    function msNormalize(st) {
+      if (st.selected && st.options.length && st.options.every(function(o) { return st.selected[o.value]; })) {
+        st.selected = null;
+      }
     }
 
+    // options: [{value, label}]; selectedValues: array, or null / ["*"] for all.
+    // Values not in options are dropped; if none survive it falls back to all.
+    function msSetOptions(id, options, selectedValues) {
+      var st = document.getElementById(id)._ms;
+      var valid = {};
+      options.forEach(function(o) { valid[o.value] = true; });
+      st.options = options;
+      if (!selectedValues || selectedValues[0] === "*") {
+        st.selected = null;
+      } else {
+        st.selected = {};
+        selectedValues.forEach(function(v) { if (valid[v]) st.selected[v] = true; });
+        if (selectedValues.length && !Object.keys(st.selected).length) st.selected = null;
+        msNormalize(st);
+      }
+      msRender(document.getElementById(id));
+    }
+
+    // null = all; otherwise array of ticked values (may be empty).
     function msGetValues(id) {
-      return Object.keys(document.getElementById(id)._ms.selected);
+      var sel = document.getElementById(id)._ms.selected;
+      return sel === null ? null : Object.keys(sel);
     }
 
     function msRender(root) {
       var st = root._ms;
-      var values = Object.keys(st.selected);
+      var all = st.selected === null;
+      var values = all ? [] : Object.keys(st.selected);
       var label = root.dataset.all;
-      if (values.length === 1) {
+      if (!all && values.length === 0) {
+        label = "None";
+      } else if (values.length === 1) {
         var opt = st.options.find(function(o) { return o.value === values[0]; });
         label = opt ? opt.label : values[0];
       } else if (values.length > 1) {
@@ -529,10 +562,10 @@
         ? st.options.filter(function(o) { return st.selected[o.value]; }).map(function(o) { return o.label; }).join(", ")
         : label;
       root.querySelector(".ms-panel").innerHTML =
-        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (values.length ? '' : ' checked') + '> ' + escapeHtml(root.dataset.all) + '</label>' +
+        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (all ? ' checked' : '') + '> ' + escapeHtml(root.dataset.all) + '</label>' +
         st.options.map(function(o) {
           return '<label class="ms-option"><input type="checkbox" value="' + escapeHtml(o.value).replace(/"/g, "&quot;") + '"' +
-            (st.selected[o.value] ? ' checked' : '') + '> ' + escapeHtml(o.label) + '</label>';
+            (all || st.selected[o.value] ? ' checked' : '') + '> ' + escapeHtml(o.label) + '</label>';
         }).join("");
     }
 
@@ -648,6 +681,7 @@
 
       // Unique users
       var users = {};
+      if (currentUser) users[currentUser.id] = currentUser.name;
       allEntries.forEach(function(e) { if (!users[e.userId]) users[e.userId] = e.userName; });
       var userOpts = Object.keys(users).map(function(id) { return { value: id, label: users[id] }; })
         .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
@@ -685,15 +719,18 @@
       var dateFrom = document.getElementById("dateFrom").value;
       var dateTo = document.getElementById("dateTo").value;
       function set(id) {
+        var v = msGetValues(id);
+        if (v === null) return null;
         var s = {};
-        msGetValues(id).forEach(function(v) { s[v] = true; });
-        return Object.keys(s).length ? s : null;
+        v.forEach(function(x) { s[x] = true; });
+        return s;
       }
       var users = set("userFilter");
       var epics = set("epicFilter");
       var projects = set("projectFilter");
       var clients = set("clientFilter");
-      var tags = msGetValues("tagFilter").map(function(t) { return t.toLowerCase(); });
+      var tagValues = msGetValues("tagFilter");
+      var tags = tagValues && tagValues.map(function(t) { return t.toLowerCase(); });
 
       filteredEntries = allEntries.filter(function(e) {
         if (dateFrom && e.date < dateFrom) return false;
@@ -702,7 +739,7 @@
         if (epics && !epics[String(e.epicId)]) return false;
         if (projects && !projects[e.project || "(No Project)"]) return false;
         if (clients && !clients[e.client || "(No Client)"]) return false;
-        if (tags.length) {
+        if (tags) {
           var entryTags = (e.tags || "").split(";").map(function(t) { return t.trim().toLowerCase(); });
           if (!tags.some(function(t) { return entryTags.indexOf(t) !== -1; })) return false;
         }
@@ -716,9 +753,10 @@
 
     function clearFilters() {
       setDefaultDateRange();
-      ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
-        document.getElementById(id)._ms.selected = {};
+      ["epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+        document.getElementById(id)._ms.selected = null;
       });
+      pendingFilters = { user: defaultUserSelection() };
       loadAllEntries();
     }
 
