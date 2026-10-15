@@ -399,6 +399,8 @@ td a:hover { text-decoration: underline; }
 }
 .tc-item-row:last-child { border-bottom: none; }
 .tc-item-row:hover { background: var(--bg-row-hover) !important; }
+.tc-item-row:disabled { opacity: 0.45; cursor: not-allowed; }
+.tc-item-row:disabled:hover { background: transparent !important; }
 
 .tc-item-type {
   display: inline-block;
@@ -439,3 +441,6 @@ td a:hover { text-decoration: underline; }
 /* Pencil icon: faintly visible at rest, full opacity on hover */
 .tc-chip-pencil { margin-left: auto; flex-shrink: 0; opacity: 0.25; }
 .tc-selected-chip:hover .tc-chip-pencil { opacity: 0.8; }
+.tc-selected-chip.locked { cursor: default; }
+.tc-selected-chip.locked:hover { border-color: var(--border) !important; background: var(--bg-header) !important; }
+.tc-selected-chip.locked .tc-chip-pencil { display: none; }

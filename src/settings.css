@@ -22,7 +22,7 @@ h1 { flex-shrink: 0; margin: 0 0 6px 0; font-weight: 600; }
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto; /* scrolls once the cards no longer fit */
 }
 
 .info-box { flex-shrink: 0; }
@@ -41,7 +41,7 @@ h1 { flex-shrink: 0; margin: 0 0 6px 0; font-weight: 600; }
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 320px;
   margin-bottom: 0;
   overflow: hidden;
 }
@@ -51,7 +51,9 @@ h1 { flex-shrink: 0; margin: 0 0 6px 0; font-weight: 600; }
 h2 { margin: 0 0 16px 0; font-weight: 600; font-size: 16px; }
 
 input[type="text"] { width: 100%; box-sizing: border-box; }
-#totalHoursField { width: 100%; box-sizing: border-box; }
+.check-row { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; color: var(--text-primary) !important; }
+.field-group { flex: 1; min-width: 220px; max-width: 360px; }
+.field-select { width: 100%; box-sizing: border-box; }
 
 .toggle-cell { text-align: center; }
 

@@ -23,34 +23,18 @@
         Hey, looks like this work item is being closed without any time logged. Want to add it real quick?
       </div>
       <div class="nudge-quick-add">
-        <input type="number" id="nudgeHours" class="nudge-input-small" min="0.25" max="24" step="0.25" placeholder="Hours" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
-        <input type="date" id="nudgeDate" class="nudge-input-small" style="width: 130px;">
-        <button class="nudge-btn" onclick="quickAddTime()">Add Time</button>
+        <button class="nudge-btn" onclick="dismissNudge(); openLogTime()">Log Time</button>
         <button class="nudge-btn nudge-btn-secondary" onclick="dismissNudge()">Skip</button>
       </div>
     </div>
 
-    <div class="time-entry-form">
-      <div class="form-group">
-        <label for="hours">Hours Spent</label>
-        <input type="number" id="hours" min="0.25" max="24" step="0.25" placeholder="e.g., 2.5" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
-      </div>
-      
-      <div class="form-group">
-        <label for="date">Date</label>
-        <input type="date" id="date">
-      </div>
-      
-      <div class="form-group">
-        <label for="description">Description (required, max 100 chars)</label>
-        <textarea id="description" rows="2" maxlength="100" placeholder="What did you work on?"></textarea>
-      </div>
-      
-      <button id="saveBtn" onclick="saveTimeEntry()">Log Time</button>
-    </div>
-    
     <div class="time-entries">
-      <h3>Time Entries</h3>
+      <div class="entries-header">
+        <h3>Time Entries</h3>
+        <!-- Hidden until applyEpicBlock() confirms logging is allowed here -->
+        <button id="logTimeBtn" onclick="openLogTime()" style="display: none;">+ Log Time</button>
+      </div>
+      <div id="epicBlockedNote" class="message info" style="display: none;"></div>
       <div id="entriesList"></div>
       <div id="totalHours" class="total-hours" style="display: none;"></div>
     </div>
@@ -145,9 +129,6 @@
       console.log("[TimeTracker] Waiting for VSS.ready...");
       VSS.ready(function() {
         try {
-          // Set default date to today
-          document.getElementById("date").valueAsDate = new Date();
-
           // Get current user
           VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
             console.log("[TimeTracker] Got extension data service");
@@ -172,12 +153,14 @@
                   console.log("[TimeTracker] Work item loaded:", args.id);
                   workItemId = args.id;
                   loadTimeEntries();
+                  applyEpicBlock();
                   setupFieldObserver();
                 },
                 onRefreshed: function(args) {
                   console.log("[TimeTracker] Work item refreshed:", args.id);
                   workItemId = args.id;
                   loadTimeEntries();
+                  applyEpicBlock();
                 },
                 onFieldChanged: function(args) {
                   if (args.changedFields && args.changedFields["System.State"]) {
@@ -206,6 +189,27 @@
 
     // Start initialization
     initializeExtension();
+
+    // Shows the Log Time button only once it's confirmed that new time may be
+    // logged on this work item (not an Epic while Settings blocks that),
+    // so a slow load can't expose it. Existing entries stay listed and editable.
+    var loggingBlocked = true;
+    function applyEpicBlock() {
+      var id = workItemId;
+      if (!id) return; // unsaved new work item — nothing to log on yet
+      getWitClient().then(function(c) {
+        return TC.loggingBlockReason(window.dataService, c, id);
+      }).catch(function() {
+        return null; // unsaved new work item, or no access — don't block
+      }).then(function(reason) {
+        if (id !== workItemId) return;
+        loggingBlocked = !!reason;
+        var note = document.getElementById("epicBlockedNote");
+        note.textContent = reason || "";
+        note.style.display = reason ? "block" : "none";
+        document.getElementById("logTimeBtn").style.display = reason ? "none" : "";
+      });
+    }
 
     function showMessage(text, type) {
       var msg = document.getElementById("message");
@@ -293,133 +297,27 @@
       });
     }
 
-    // Possible field reference names for Client (varies by where field was created in Azure DevOps)
-    var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
-    var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
-
-    // Helper to get field value from multiple possible reference names
-    function getFieldValue(fields, refNames, defaultValue) {
-      for (var i = 0; i < refNames.length; i++) {
-        if (fields[refNames[i]]) {
-          return fields[refNames[i]];
-        }
-      }
-      return defaultValue;
-    }
-
-    function mergeTags(existing, additional) {
-      if (!additional) return existing;
-      if (!existing) return additional;
-      var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
-      additional.split(";").forEach(function(t) {
-        var trimmed = t.trim();
-        if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
-      });
-      return seen.join("; ");
-    }
-
-    // Get all possible field names for API requests
-    function getAllClientFieldRefs() {
-      return CLIENT_FIELD_REFS.slice();
-    }
-    function getAllProjectFieldRefs() {
-      return PROJECT_FIELD_REFS.slice();
-    }
-
-    function saveTimeEntry() {
-      var hours = parseFloat(document.getElementById("hours").value);
-      var date = document.getElementById("date").value;
-      var description = document.getElementById("description").value.trim();
-
-      if (!hours || hours <= 0 || hours > 24) {
-        showMessage("Please enter valid hours (0.25 - 24)", "error");
+    // Opens the shared Log Time dialog with this work item locked in.
+    function openLogTime() {
+      if (loggingBlocked) {
+        showMessage(TC.EPIC_BLOCKED_MSG, "error");
         return;
       }
-      if (!date) {
-        showMessage("Please select a date", "error");
-        return;
-      }
-      if (!description) {
-        showMessage("Please enter a description", "error");
-        return;
-      }
-
-      document.getElementById("saveBtn").disabled = true;
-
-      // Get work item details for epic/tags/project/client
-      VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function(VSS_Service, WIT_Client) {
-        var witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
-
-        // Request work item without specifying fields to get all available fields
-        // This avoids 400 errors when some custom fields don't exist
-
-        function createEntry(workItem) {
-          var ctx = VSS.getWebContext();
-          return {
-            id: Date.now().toString(),
-            workItemId: workItemId,
-            workItemTitle: workItem.fields["System.Title"],
-            teamProject: workItem.fields["System.TeamProject"] || (ctx.project || {}).name || "",
-            parentId: workItem.fields["System.Parent"] || null,
-            tags: workItem.fields["System.Tags"] || "",
-            project: getFieldValue(workItem.fields, PROJECT_FIELD_REFS, "(No Project)"),
-            client: getFieldValue(workItem.fields, CLIENT_FIELD_REFS, "(No Client)"),
-            hours: hours,
-            date: date,
-            description: description,
-            userId: currentUser.id,
-            userName: currentUser.name,
-            userEmail: currentUser.email,
-            createdAt: new Date().toISOString()
-          };
-        }
-
-        function processWorkItem(workItem) {
-          var entry = createEntry(workItem);
-
-          TC.resolveAncestry(witClient, workItem).then(function(anc) {
-            entry.parentTitle = anc.parentTitle;
-            entry.parentType = anc.parentType;
-            entry.epicId = anc.epicId;
-            entry.epicTitle = anc.epicTitle;
-            entry.ancestorIds = anc.ancestors.map(function(item) { return item.id; });
-
-            anc.ancestors.forEach(function(item) {
-              if (item.fields["System.Tags"]) {
-                entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
-              }
-              var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
-
-              var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
-              if (entry.project === "(No Project)" && itemProject) {
-                entry.project = itemProject;
-                entry.projectInheritedFrom = inheritedFrom;
-              }
-
-              var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
-              if (entry.client === "(No Client)" && itemClient) {
-                entry.client = itemClient;
-                entry.clientInheritedFrom = inheritedFrom;
-              }
-            });
-
-            // Save entry to monthly partition
-            TC.saveEntry(window.dataService, entry, witClient).then(function() {
-              showMessage("Time entry saved!", "success");
-              document.getElementById("hours").value = "";
-              document.getElementById("description").value = "";
-              document.getElementById("saveBtn").disabled = false;
-              loadTimeEntries();
-            });
-          });
-        }
-
-        // Get work item with expand=All to retrieve all available fields including System.Parent
-        // expand parameter: 0=None, 1=Relations, 2=Fields, 3=Links, 4=All
-        witClient.getWorkItem(workItemId, null, null, 4).then(processWorkItem, function(err) {
-          showMessage("Error: " + err.message, "error");
-          document.getElementById("saveBtn").disabled = false;
+      getWitClient().then(function(c) {
+        return c.getWorkItem(workItemId, ["System.Title", "System.WorkItemType"]);
+      }).then(function(wi) {
+        var item = { id: workItemId, title: wi.fields["System.Title"], type: wi.fields["System.WorkItemType"] };
+        TC.openAddEntryModal({
+          dataService: window.dataService,
+          witClientGetter: getWitClient,
+          currentUser: currentUser,
+          projectName: window.__projectName,
+          initialItem: item,
+          lockItem: true,
+          onSaved: function() { showMessage("Time entry saved!", "success"); loadTimeEntries(); }
         });
+      }, function(err) {
+        showMessage("Error: " + (err.message || err), "error");
       });
     }
 
@@ -518,8 +416,8 @@
         return s.toLowerCase() === stateLower;
       });
 
-      if (!isClosed) {
-        console.log("[TimeTracker] State not closed, skipping nudge");
+      if (!isClosed || loggingBlocked) {
+        console.log("[TimeTracker] State not closed or logging blocked, skipping nudge");
         return;
       }
 
@@ -542,49 +440,13 @@
 
     // Show the gentle nudge banner
     function showNudgeBanner() {
-      var banner = document.getElementById("nudgeBanner");
-      var nudgeDate = document.getElementById("nudgeDate");
-
-      // Set default date to today
-      nudgeDate.valueAsDate = new Date();
-
-      banner.style.display = "block";
+      document.getElementById("nudgeBanner").style.display = "block";
       document.getElementById("app").scrollTo({ top: 0, behavior: "smooth" });
     }
 
     // Dismiss the nudge banner
     function dismissNudge() {
-      var banner = document.getElementById("nudgeBanner");
-      banner.style.display = "none";
-
-      // Clear the inputs
-      document.getElementById("nudgeHours").value = "";
-      document.getElementById("nudgeDate").valueAsDate = new Date();
-    }
-
-    // Quick add time from the nudge banner
-    function quickAddTime() {
-      var hours = parseFloat(document.getElementById("nudgeHours").value);
-      var date = document.getElementById("nudgeDate").value;
-
-      if (!hours || hours <= 0 || hours > 24) {
-        showMessage("Please enter valid hours (0.25 - 24)", "error");
-        return;
-      }
-      if (!date) {
-        showMessage("Please select a date", "error");
-        return;
-      }
-
-      // Use the main form's logic by populating it and triggering save
-      document.getElementById("hours").value = hours;
-      document.getElementById("date").value = date;
-
-      // Hide the nudge banner
-      dismissNudge();
-
-      // Trigger the save
-      saveTimeEntry();
+      document.getElementById("nudgeBanner").style.display = "none";
     }
 
     function editEntry(entryId) {

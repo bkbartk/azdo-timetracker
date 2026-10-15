@@ -11,8 +11,8 @@
 
   var STORAGE_KEY_PREFIX = "timetracker_";
 
-  // Possible field reference names (vary by where the field was created
-  // in Azure DevOps). Kept in sync with time-entry.html.
+  // Default reference names tried when no field is configured in
+  // Settings (they vary by where the field was created in Azure DevOps).
   var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
   var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
 
@@ -21,6 +21,41 @@
       if (fields[refNames[i]]) return fields[refNames[i]];
     }
     return defaultValue;
+  }
+
+  // A field picked in Settings (projectField / clientField) replaces the
+  // default list entirely.
+  function fieldRefsFromSettings(settings) {
+    return {
+      project: settings.projectField ? [settings.projectField] : PROJECT_FIELD_REFS,
+      client: settings.clientField ? [settings.clientField] : CLIENT_FIELD_REFS
+    };
+  }
+
+  // Project/client for a work item: its own value, else the nearest
+  // ancestor's (`anc` is a resolveAncestry() result). Shared by entry
+  // creation and the report's Re-sync so both inherit identically.
+  function resolveProjectClient(workItem, anc, refs) {
+    var out = {
+      project: getFieldValue(workItem.fields, refs.project, "(No Project)"),
+      projectInheritedFrom: null,
+      client: getFieldValue(workItem.fields, refs.client, "(No Client)"),
+      clientInheritedFrom: null
+    };
+    anc.ancestors.forEach(function (item) {
+      var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
+      var itemProject = getFieldValue(item.fields, refs.project, null);
+      if (out.project === "(No Project)" && itemProject) {
+        out.project = itemProject;
+        out.projectInheritedFrom = inheritedFrom;
+      }
+      var itemClient = getFieldValue(item.fields, refs.client, null);
+      if (out.client === "(No Client)" && itemClient) {
+        out.client = itemClient;
+        out.clientInheritedFrom = inheritedFrom;
+      }
+    });
+    return out;
   }
 
   function checkIsAdmin() {
@@ -243,6 +278,36 @@
     });
   }
 
+  // settings.blockEpicLogging: new time can't be logged directly on an
+  // Epic. Existing entries on an Epic stay listed and editable — only
+  // creating one (or moving one onto an Epic) is refused.
+  var EPIC_BLOCKED_MSG = "Time can't be logged directly on an Epic — log it on a Feature, User Story or Task under it.";
+
+  function isLoggingBlocked(settings, workItemType) {
+    return !!settings.blockEpicLogging && workItemType === "Epic";
+  }
+
+  // Resolves to EPIC_BLOCKED_MSG when new time may not be logged on the
+  // work item, else null. Pass `workItemType` when already known to skip
+  // the lookup. Shared by the work item form and the Log Time dialog.
+  function loggingBlockReason(dataService, witClient, workItemId, workItemType) {
+    return getSettings(dataService).then(function (settings) {
+      if (!settings.blockEpicLogging) return null;
+      var typeP = workItemType ? Promise.resolve(workItemType) :
+        witClient.getWorkItem(workItemId, ["System.WorkItemType"]).then(function (wi) {
+          return wi.fields["System.WorkItemType"];
+        });
+      return typeP.then(function (type) {
+        return isLoggingBlocked(settings, type) ? EPIC_BLOCKED_MSG : null;
+      });
+    });
+  }
+
+  // WIQL clause that keeps Epics out of "pick something to log on" lists.
+  function epicExclusionWiql(settings) {
+    return settings.blockEpicLogging ? " AND [System.WorkItemType] <> 'Epic'" : "";
+  }
+
   // The work item itself plus every ancestor recorded on the entry
   // (nearest first, epic last if one was found).
   function chainIdsFor(entry) {
@@ -450,20 +515,27 @@
   }
 
   // ---- Entry construction with parent/epic inheritance -------------
-  // Mirrors processWorkItem() in time-entry.html. Resolves with the
-  // built entry; the caller is responsible for persisting it.
+  // Resolves with the built entry; the caller is responsible for
+  // persisting it.
 
-  function buildEntryForWorkItem(witClient, workItemId, currentUser, vals) {
+  function buildEntryForWorkItem(dataService, witClient, workItemId, currentUser, vals) {
     // expand: 0=None 1=Relations 2=Fields 3=Links 4=All
-    return witClient.getWorkItem(workItemId, null, null, 4).then(function (workItem) {
+    return Promise.all([
+      witClient.getWorkItem(workItemId, null, null, 4),
+      getSettings(dataService)
+    ]).then(function (results) {
+      var workItem = results[0];
+      if (isLoggingBlocked(results[1], workItem.fields["System.WorkItemType"])) {
+        throw new Error(EPIC_BLOCKED_MSG);
+      }
+      var refs = fieldRefsFromSettings(results[1]);
       var entry = {
         id: Date.now().toString(),
         workItemId: workItemId,
         workItemTitle: workItem.fields["System.Title"],
+        teamProject: workItem.fields["System.TeamProject"] || "",
         parentId: workItem.fields["System.Parent"] || null,
         tags: workItem.fields["System.Tags"] || "",
-        project: getFieldValue(workItem.fields, PROJECT_FIELD_REFS, "(No Project)"),
-        client: getFieldValue(workItem.fields, CLIENT_FIELD_REFS, "(No Client)"),
         hours: vals.hours,
         date: vals.date,
         description: vals.description || "",
@@ -484,22 +556,9 @@
           if (item.fields["System.Tags"]) {
             entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
           }
-          var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
-
-          var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && itemProject) {
-            entry.project = itemProject;
-            entry.projectInheritedFrom = inheritedFrom;
-          }
-
-          var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && itemClient) {
-            entry.client = itemClient;
-            entry.clientInheritedFrom = inheritedFrom;
-          }
         });
 
-        return entry;
+        return Object.assign(entry, resolveProjectClient(workItem, anc, refs));
       });
     });
   }
@@ -519,6 +578,7 @@
   //   title           — modal heading (default "Log Time")
   //   saveLabel       — save button label (default "Log Time")
   //   initialItem     — { id, title, type } pre-selected work item
+  //   lockItem        — true: initialItem can't be changed (work item page)
   //   initialHours    — number
   //   initialDate     — "YYYY-MM-DD"
   //   initialDesc     — string
@@ -585,6 +645,9 @@
 
     var selectedItem = null;
     var searchTimer  = null;
+    var settingsP    = getSettings(config.dataService);
+    var settings     = {};
+    settingsP.then(function(s) { settings = s; });
 
     function close() { backdrop.remove(); document.removeEventListener('keydown', onEsc); }
 
@@ -613,6 +676,22 @@
       setTimeout(function() { document.getElementById('tcHours').focus(); }, 0);
     }
 
+    // A list click only selects the item when new time may be logged on
+    // it. (initialItem bypasses this, so an existing entry on a now-blocked
+    // Epic stays editable.)
+    function pickItem(item) {
+      var statusEl = document.getElementById('tcSearchStatus');
+      statusEl.textContent = '';
+      config.witClientGetter().then(function(c) {
+        return loggingBlockReason(config.dataService, c, item.id, item.type);
+      }).then(function(reason) {
+        if (reason) statusEl.textContent = reason;
+        else selectItem(item);
+      }, function() {
+        statusEl.textContent = 'Could not check work item #' + item.id + ' — try again.';
+      });
+    }
+
     function renderList(items, groupLabel) {
       var list = document.getElementById('tcItemList');
       if (!items || !items.length) {
@@ -623,7 +702,9 @@
       list.innerHTML =
         (groupLabel ? '<div class="tc-item-group">' + escapeHtml(groupLabel) + '</div>' : '') +
         items.map(function(item) {
-          return '<button class="tc-item-row">' +
+          var blocked = isLoggingBlocked(settings, item.type);
+          return '<button class="tc-item-row"' +
+            (blocked ? ' disabled title="' + escapeHtml(EPIC_BLOCKED_MSG) + '"' : '') + '>' +
             (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
             '<span class="wi-id">#' + item.id + '</span> ' +
             '<span class="wi-title tc-item-title">' + escapeHtml(item.title || '(untitled)') + '</span>' +
@@ -631,7 +712,7 @@
         }).join('');
       var cached = items;
       Array.prototype.forEach.call(list.querySelectorAll('.tc-item-row'), function(btn, i) {
-        btn.addEventListener('click', function() { selectItem(cached[i]); });
+        btn.addEventListener('click', function() { pickItem(cached[i]); });
       });
     }
 
@@ -667,13 +748,15 @@
         return;
       }
       statusEl.textContent = 'Searching…';
-      config.witClientGetter().then(function(c) {
+      Promise.all([config.witClientGetter(), settingsP]).then(function(results) {
+        var c = results[0];
         var safe = q.replace(/'/g, "''");
         var proj = config.projectName || '';
         var wiql = { query:
           'SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS \'' + safe + '\'' +
           (proj ? ' AND [System.TeamProject] = \'' + proj.replace(/'/g, "''") + '\'' : '') +
           ' AND [System.State] NOT IN (\'Closed\',\'Done\',\'Removed\',\'Resolved\',\'Completed\')' +
+          epicExclusionWiql(results[1]) +
           ' ORDER BY [System.ChangedDate] DESC'
         };
         return c.queryByWiql(wiql, proj ? { project: proj } : null, false, 20)
@@ -730,7 +813,7 @@
         });
       } else if (config.entryId) {
         p = config.witClientGetter().then(function(c) {
-          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+          return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
             { hours: hours, date: date, description: desc }).then(function(newEntry) {
             return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
               .then(function() { return saveEntry(config.dataService, newEntry, c); });
@@ -738,7 +821,7 @@
         });
       } else {
         p = config.witClientGetter().then(function(c) {
-          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+          return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
             { hours: hours, date: date, description: desc }).then(function(entry) {
             return saveEntry(config.dataService, entry, c);
           });
@@ -758,7 +841,11 @@
       var q = ev.target.value;
       searchTimer = setTimeout(function() { doSearch(q); }, 300);
     });
-    document.getElementById('tcSelectedChip').addEventListener('click', openSearch);
+    if (config.lockItem) {
+      document.getElementById('tcSelectedChip').classList.add('locked');
+    } else {
+      document.getElementById('tcSelectedChip').addEventListener('click', openSearch);
+    }
     document.getElementById('tcSaveBtn').addEventListener('click', doSave);
     document.getElementById('tcAddClose').addEventListener('click', close);
     backdrop.addEventListener('click', function(ev) { if (ev.target === backdrop) close(); });
@@ -781,6 +868,8 @@
     CLIENT_FIELD_REFS: CLIENT_FIELD_REFS,
     PROJECT_FIELD_REFS: PROJECT_FIELD_REFS,
     getFieldValue: getFieldValue,
+    fieldRefsFromSettings: fieldRefsFromSettings,
+    resolveProjectClient: resolveProjectClient,
     localISODate: localISODate,
     todayISO: todayISO,
     startOfWeek: startOfWeek,
@@ -796,6 +885,10 @@
     deleteEntryById: deleteEntryById,
     SETTINGS_KEY: SETTINGS_KEY,
     getSettings: getSettings,
+    EPIC_BLOCKED_MSG: EPIC_BLOCKED_MSG,
+    isLoggingBlocked: isLoggingBlocked,
+    loggingBlockReason: loggingBlockReason,
+    epicExclusionWiql: epicExclusionWiql,
     recalcTotalHours: recalcTotalHours,
     mergeTags: mergeTags,
     EDIT_ICON: EDIT_ICON,

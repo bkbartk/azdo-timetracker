@@ -51,7 +51,7 @@
       <button class="icon-btn toolbar-btn" onclick="exportBackupJSON()" title="Backup JSON" aria-label="Backup JSON">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
       </button>
-      <button id="resyncBtn" class="icon-btn toolbar-btn resync-btn" onclick="resyncAll()" title="Re-sync tags, parent and epic from Azure DevOps (admin)" aria-label="Re-sync" style="display:none">
+      <button id="resyncBtn" class="icon-btn toolbar-btn resync-btn" onclick="resyncAll()" title="Re-sync tags, parent, epic, project and client from Azure DevOps (admin)" aria-label="Re-sync" style="display:none">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
         <span id="resyncProgress"></span>
       </button>
@@ -174,7 +174,7 @@
 
     var checkIsAdmin = TC.checkIsAdmin;
 
-    function fetchTagsForWorkItem(witClient, workItemId) {
+    function fetchTagsForWorkItem(witClient, workItemId, fieldRefs) {
       return witClient.getWorkItem(workItemId, null, null, 4).then(function(wi) {
         var meta = {
           workItemTitle: wi.fields['System.Title'],
@@ -196,7 +196,7 @@
               meta.tags = TC.mergeTags(meta.tags, item.fields['System.Tags']);
             }
           });
-          return meta;
+          return Object.assign(meta, TC.resolveProjectClient(wi, anc, fieldRefs));
         });
       });
     }
@@ -237,7 +237,7 @@
       var total = workItemIds.length;
       var failed = [];
 
-      if (!confirm('Re-sync tags, parent and epic for ' + filteredEntries.length + ' filtered entries (' + total + ' unique work items) from Azure DevOps?')) return;
+      if (!confirm('Re-sync tags, parent, epic, project and client for ' + filteredEntries.length + ' filtered entries (' + total + ' unique work items) from Azure DevOps?')) return;
 
       var btn = document.getElementById('resyncBtn');
       var progress = document.getElementById('resyncProgress');
@@ -246,13 +246,15 @@
       var entryUpdates = [];
       var metaByWorkItem = {};
 
-      getWitClient().then(function(witClient) {
+      Promise.all([getWitClient(), TC.getSettings(window.dataService)]).then(function(results) {
+        var witClient = results[0];
+        var fieldRefs = TC.fieldRefsFromSettings(results[1]);
         function processBatch(ids) {
           if (ids.length === 0) return Promise.resolve();
           var batch = ids.slice(0, 5);
           var rest = ids.slice(5);
           return Promise.all(batch.map(function(wiId) {
-            return fetchTagsForWorkItem(witClient, wiId).then(function(meta) {
+            return fetchTagsForWorkItem(witClient, wiId, fieldRefs).then(function(meta) {
               metaByWorkItem[wiId] = meta;
               byWorkItem[wiId].forEach(function(e) {
                 entryUpdates.push({ id: e.id, date: e.date, updates: meta });

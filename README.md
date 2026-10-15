@@ -256,6 +256,10 @@ If you want project/client tracking:
 
 If these fields don't exist, the extension will still work - entries will simply show "(No Project)" and "(No Client)".
 
+### Using a Different Field
+
+If your organization already has a field for this under another name (e.g. `Customer` instead of `Client`), pick it in the extension's **Settings** page under **Project & Client Fields**. The default looks for `Custom.Project` / `Custom.Client`. After changing it, run **Re-sync** in Time Reports to update existing entries.
+
 ## Data Storage
 
 Time entries are stored using Azure DevOps Extension Data Service with **collection-scoped storage**. This means:
@@ -268,9 +272,8 @@ Time entries are stored using Azure DevOps Extension Data Service with **collect
 ## Limitations
 
 - Hierarchy support works for standard Azure DevOps hierarchy (Epic → Feature → User Story → Task/Bug)
-- Property inheritance only applies to new time entries (existing entries won't be retroactively updated)
+- Property inheritance only applies to new time entries; an admin can update existing entries with **Re-sync** in Time Reports
 - Users can only delete their own time entries
-- Custom.Project and Custom.Client fields must use exact reference names if you want project/client tracking
 - Maximum of 3 levels of hierarchy traversal (work item → parent → grandparent)
 
 ## Development

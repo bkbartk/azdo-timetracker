@@ -219,14 +219,16 @@
     // WIQL: active work items assigned to the current user in this project.
     // Degrades gracefully — a failure just means we show logged items only.
     function loadAssignedItems() {
-      return getWitClient().then(function(client) {
+      return Promise.all([getWitClient(), TC.getSettings(window.dataService)]).then(function(results) {
+        var client = results[0];
         var notIn = EXCLUDED_STATES.map(function(s){ return "'" + s + "'"; }).join(",");
         var wiql = {
           query:
             "SELECT [System.Id] FROM WorkItems " +
             "WHERE [System.AssignedTo] = @Me " +
-            "AND [System.State] NOT IN (" + notIn + ") " +
-            "ORDER BY [System.ChangedDate] DESC"
+            "AND [System.State] NOT IN (" + notIn + ")" +
+            TC.epicExclusionWiql(results[1]) +
+            " ORDER BY [System.ChangedDate] DESC"
         };
         var teamContext = { project: window.__projectName };
         return client.queryByWiql(wiql, teamContext, false, 100).then(function(result) {
