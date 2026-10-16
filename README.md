@@ -260,6 +260,10 @@ If these fields don't exist, the extension will still work - entries will simply
 
 If your organization already has a field for this under another name (e.g. `Customer` instead of `Client`), pick it in the extension's **Settings** page under **Project & Client Fields**. The default looks for `Custom.Project` / `Custom.Client`. After changing it, run **Re-sync** in Time Reports to update existing entries.
 
+### Locking Old Entries
+
+To stop old records from being changed, set **Edit window (days back)** on the extension's **Settings** page under **Logging Rules**. With e.g. `14`, time dated more than 14 days ago can't be added, edited or deleted by anyone. Leave it empty (the default) for no limit.
+
 ## Data Storage
 
 Time entries are stored using Azure DevOps Extension Data Service with **collection-scoped storage**. This means:

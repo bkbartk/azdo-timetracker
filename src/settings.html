@@ -69,6 +69,18 @@
         New time must go on a Feature, User Story or Task under the epic; its hours still roll up
         to the epic in reports. Existing entries on Epics are kept and can still be edited.
       </p>
+      <div class="schedule-row">
+        <div class="schedule-group">
+          <label for="editWindowDays">Edit window (days back)</label>
+          <input type="number" id="editWindowDays" min="0" max="3650" step="1" placeholder="no limit"
+                 onchange="saveEditWindowDays()" disabled>
+        </div>
+        <span id="editWindowStatus" class="status" style="align-self:flex-end"></span>
+      </div>
+      <p class="note">
+        When set (e.g. <code>14</code>), entries dated more than that many days ago can't be added,
+        edited or deleted by anyone. Leave empty for no limit.
+      </p>
     </div>
 
     <!-- Work item fields -->
@@ -225,6 +237,7 @@
             document.getElementById('mainContent').style.display = 'flex';
             loadData();
             initBlockEpicLogging();
+            initEditWindowDays();
             initWorkItemFields();
           });
         }, function(err) {
@@ -571,6 +584,40 @@
         status.className = 'status error';
         status.textContent = 'Error: ' + (err.message || String(err));
         box.disabled = false;
+      });
+    }
+
+    function initEditWindowDays() {
+      var input = document.getElementById('editWindowDays');
+      window.TimeCore.getSettings(window.dataService).then(function(settings) {
+        input.value = settings.editWindowDays != null ? settings.editWindowDays : '';
+        input.disabled = false;
+      });
+    }
+
+    // Empty input = no limit (stored as null).
+    function saveEditWindowDays() {
+      var input  = document.getElementById('editWindowDays');
+      var status = document.getElementById('editWindowStatus');
+      var raw    = input.value.trim();
+      var days   = raw === '' ? null : parseInt(raw, 10);
+      if (days !== null && (isNaN(days) || days < 0)) {
+        status.className = 'status error';
+        status.textContent = 'Enter a whole number of days, or leave empty.';
+        return;
+      }
+      input.disabled = true;
+      status.className = 'status';
+      status.textContent = 'Saving…';
+      persistSettings({ editWindowDays: days }).then(function() {
+        input.value = days === null ? '' : days;
+        status.className = 'status success';
+        status.textContent = 'Saved.';
+        input.disabled = false;
+      }, function(err) {
+        status.className = 'status error';
+        status.textContent = 'Error: ' + (err.message || String(err));
+        input.disabled = false;
       });
     }
 

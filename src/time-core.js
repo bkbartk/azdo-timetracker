@@ -226,7 +226,9 @@
 
   function saveEntry(dataService, entry, witClient) {
     var key = getStorageKeyForDate(entry.date);
-    return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
+    return checkEditWindow(dataService, [entry.date]).then(function () {
+      return dataService.getValue(key, { scopeType: "Default" });
+    }).then(function (data) {
       var monthEntries = data || [];
       monthEntries.push(entry);
       return dataService.setValue(key, monthEntries, { scopeType: "Default" }).then(function (result) {
@@ -237,7 +239,9 @@
 
   function deleteEntryById(dataService, entryId, entryDate, witClient) {
     var key = getStorageKeyForDate(entryDate);
-    return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
+    return checkEditWindow(dataService, [entryDate]).then(function () {
+      return dataService.getValue(key, { scopeType: "Default" });
+    }).then(function (data) {
       if (!data || data.length === 0) {
         throw new Error("No entries found for this month — aborting delete to prevent data loss");
       }
@@ -299,6 +303,32 @@
         });
       return typeP.then(function (type) {
         return isLoggingBlocked(settings, type) ? EPIC_BLOCKED_MSG : null;
+      });
+    });
+  }
+
+  // settings.editWindowDays: when set, entries dated more than that many
+  // days ago can't be added, edited or deleted. Empty = no limit.
+  // Returns the earliest editable "YYYY-MM-DD", or null when unlimited.
+  function editWindowCutoff(settings) {
+    var days = parseInt(settings.editWindowDays, 10);
+    if (isNaN(days) || days < 0) return null;
+    var d = new Date();
+    d.setDate(d.getDate() - days);
+    return localISODate(d);
+  }
+
+  // Rejects when any of `dates` (entry dates, "YYYY-MM-DD") falls before
+  // the edit window. Every add/edit/delete goes through this.
+  function checkEditWindow(dataService, dates) {
+    return getSettings(dataService).then(function (settings) {
+      var cutoff = editWindowCutoff(settings);
+      if (!cutoff) return;
+      (dates || []).forEach(function (date) {
+        if (date && date < cutoff) {
+          throw new Error("Entries before " + cutoff + " are locked — time can only be added, changed or deleted up to " +
+            settings.editWindowDays + " days back.");
+        }
       });
     });
   }
@@ -414,6 +444,12 @@
   }
 
   function updateEntry(dataService, entryId, originalDate, updates, witClient) {
+    return checkEditWindow(dataService, [originalDate, updates.date]).then(function () {
+      return applyEntryUpdate(dataService, entryId, originalDate, updates, witClient);
+    });
+  }
+
+  function applyEntryUpdate(dataService, entryId, originalDate, updates, witClient) {
     var originalKey = getStorageKeyForDate(originalDate);
     var newKey = getStorageKeyForDate(updates.date);
     if (originalKey === newKey) {
@@ -647,7 +683,11 @@
     var searchTimer  = null;
     var settingsP    = getSettings(config.dataService);
     var settings     = {};
-    settingsP.then(function(s) { settings = s; });
+    settingsP.then(function(s) {
+      settings = s;
+      var cutoff = editWindowCutoff(s);
+      if (cutoff) document.getElementById('tcDate').min = cutoff;
+    });
 
     function close() { backdrop.remove(); document.removeEventListener('keydown', onEsc); }
 
@@ -805,14 +845,19 @@
       msgEl.style.display = 'none';
 
       var sameItem = config.entryId && config.initialItem && selectedItem.id === config.initialItem.id;
+      // Checked up front: moving an entry to another work item deletes
+      // before it saves, so a late rejection would lose the entry.
+      var getClient = function() {
+        return checkEditWindow(config.dataService, [date, config.originalDate]).then(config.witClientGetter);
+      };
       var p;
       if (config.entryId && sameItem) {
-        p = config.witClientGetter().then(function(c) {
+        p = getClient().then(function(c) {
           return updateEntry(config.dataService, config.entryId, config.originalDate,
             { hours: hours, date: date, description: desc }, c);
         });
       } else if (config.entryId) {
-        p = config.witClientGetter().then(function(c) {
+        p = getClient().then(function(c) {
           return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
             { hours: hours, date: date, description: desc }).then(function(newEntry) {
             return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
@@ -820,7 +865,7 @@
           });
         });
       } else {
-        p = config.witClientGetter().then(function(c) {
+        p = getClient().then(function(c) {
           return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
             { hours: hours, date: date, description: desc }).then(function(entry) {
             return saveEntry(config.dataService, entry, c);
@@ -889,6 +934,8 @@
     isLoggingBlocked: isLoggingBlocked,
     loggingBlockReason: loggingBlockReason,
     epicExclusionWiql: epicExclusionWiql,
+    editWindowCutoff: editWindowCutoff,
+    checkEditWindow: checkEditWindow,
     recalcTotalHours: recalcTotalHours,
     mergeTags: mergeTags,
     EDIT_ICON: EDIT_ICON,
