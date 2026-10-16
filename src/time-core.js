@@ -318,11 +318,27 @@
     return localISODate(d);
   }
 
+  // Last cutoff read from settings, so list renders can hide edit/delete
+  // buttons synchronously. Pages call refreshEditCutoff while loading.
+  var cachedEditCutoff = null;
+
+  function refreshEditCutoff(dataService) {
+    return getSettings(dataService).then(function (settings) {
+      cachedEditCutoff = editWindowCutoff(settings);
+      return cachedEditCutoff;
+    });
+  }
+
+  function isEntryLocked(date) {
+    return !!(cachedEditCutoff && date && date < cachedEditCutoff);
+  }
+
   // Rejects when any of `dates` (entry dates, "YYYY-MM-DD") falls before
   // the edit window. Every add/edit/delete goes through this.
   function checkEditWindow(dataService, dates) {
     return getSettings(dataService).then(function (settings) {
       var cutoff = editWindowCutoff(settings);
+      cachedEditCutoff = cutoff;
       if (!cutoff) return;
       (dates || []).forEach(function (date) {
         if (date && date < cutoff) {
@@ -936,6 +952,8 @@
     epicExclusionWiql: epicExclusionWiql,
     editWindowCutoff: editWindowCutoff,
     checkEditWindow: checkEditWindow,
+    refreshEditCutoff: refreshEditCutoff,
+    isEntryLocked: isEntryLocked,
     recalcTotalHours: recalcTotalHours,
     mergeTags: mergeTags,
     EDIT_ICON: EDIT_ICON,

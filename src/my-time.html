@@ -360,7 +360,8 @@
 
       return Promise.all([
         TC.loadEntriesForKeys(window.dataService, monthKeys),
-        loadAssignedItems()
+        loadAssignedItems(),
+        TC.refreshEditCutoff(window.dataService)
       ]).then(function(res) {
         var entries = res[0];
         assignedItems = res[1];
@@ -584,6 +585,7 @@
       }
       empty.style.display = "none";
       body.innerHTML = sorted.map(function(e) {
+        var canModify = !TC.isEntryLocked(e.date);
         var wiUrl = getWorkItemUrl(e.workItemId, e.teamProject);
         var wiIdLabel = wiUrl
           ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer" class="wi-id">#' + e.workItemId + '</a>'
@@ -593,9 +595,10 @@
           '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> ' + wiIdLabel + '</td>' +
           '<td>' + (e.description ? escapeHtml(e.description) : '<span class="muted">—</span>') + '</td>' +
           '<td><strong>' + e.hours + 'h</strong></td>' +
-          '<td class="actions-cell">' +
+          '<td class="actions-cell">' + (canModify ?
             '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
-            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">' + DELETE_ICON + '</button>' +
+            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">' + DELETE_ICON + '</button>'
+            : '') +
           '</td>' +
         '</tr>';
       }).join("");

@@ -654,7 +654,8 @@
         return getEntriesForMonth(key);
       });
 
-      Promise.all(promises).then(function(results) {
+      Promise.all([Promise.all(promises), TC.refreshEditCutoff(window.dataService)]).then(function(res) {
+        var results = res[0];
         allEntries = [];
         results.forEach(function(monthEntries) {
           allEntries = allEntries.concat(monthEntries);
@@ -837,7 +838,7 @@
           parentDisplay = escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>";
         }
 
-        var canModify = currentUser && e.userId === currentUser.id;
+        var canModify = currentUser && e.userId === currentUser.id && !TC.isEntryLocked(e.date);
         var actionBtns = canModify
           ? '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
             '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\')">' + DELETE_ICON + '</button>'

@@ -323,7 +323,8 @@
 
     function loadTimeEntries() {
       console.log("[TimeTracker] Loading time entries for work item:", workItemId);
-      getAllEntries().then(function(entries) {
+      Promise.all([getAllEntries(), TC.refreshEditCutoff(window.dataService)]).then(function(res) {
+        var entries = res[0];
         console.log("[TimeTracker] Loaded total entries from all months:", entries.length);
         var workItemEntries = entries.filter(function(e) {
           return e.workItemId === workItemId;
@@ -350,7 +351,7 @@
         }, 0);
 
         listEl.innerHTML = workItemEntries.map(function(e) {
-          var canModify = e.userId === currentUser.id;
+          var canModify = e.userId === currentUser.id && !TC.isEntryLocked(e.date);
           return '<div class="time-entry-item">' +
             '<div class="entry-info">' +
               '<span class="entry-user">' + escapeHtml(e.userName) + '</span>' +
