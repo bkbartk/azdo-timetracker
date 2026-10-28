@@ -259,7 +259,8 @@
       var monthEntries = data || [];
       monthEntries.push(entry);
       return dataService.setValue(key, monthEntries, { scopeType: "Default" }).then(function (result) {
-        return recalcTotalHours(dataService, witClient, [entry]).then(function () { return result; });
+        recalcInBackground(dataService, witClient, [entry]);
+        return result;
       });
     });
   }
@@ -275,7 +276,8 @@
       var removed = data.find(function (e) { return e.id === entryId; });
       var filtered = data.filter(function (e) { return e.id !== entryId; });
       return dataService.setValue(key, filtered, { scopeType: "Default" }).then(function (result) {
-        return recalcTotalHours(dataService, witClient, [removed]).then(function () { return result; });
+        recalcInBackground(dataService, witClient, [removed]);
+        return result;
       });
     });
   }
@@ -392,7 +394,7 @@
   // (nearest first, epic last if one was found).
   function chainIdsFor(entry) {
     var ids = [entry.workItemId];
-    (entry.ancestorIds || []).forEach(function (id) {
+    asArray(entry.ancestorIds).forEach(function (id) {
       if (ids.indexOf(id) === -1) ids.push(id);
     });
     return ids;
@@ -420,7 +422,10 @@
 
   // touchedEntries: entry snapshots (old and/or new state; nulls allowed)
   // whose ancestor chains define which work items need recomputing.
-  function recalcTotalHours(dataService, witClient, touchedEntries) {
+  // onStart: optional, called once it's clear there is work to do (a field
+  // is configured and there are work items to update). Resolves to the ids
+  // whose field write failed, or undefined when there was nothing to do.
+  function recalcTotalHours(dataService, witClient, touchedEntries, onStart) {
     if (!witClient) return Promise.resolve();
     return getSettings(dataService).then(function (settings) {
       var fieldRef = settings.totalHoursField;
@@ -442,6 +447,7 @@
 
       var ids = Object.keys(idSet);
       if (!ids.length) return;
+      if (onStart) onStart(ids);
 
       var registerPromise = registryChanged
         ? dataService.setValue(SETTINGS_KEY, Object.assign({}, settings, { knownMonthKeys: known }), { scopeType: "Default" })
@@ -464,12 +470,83 @@
             if (chainIdsFor(e).indexOf(id) !== -1) total += (e.hours || 0);
           });
           return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
-            .catch(function (err) {
+            .then(function () { return null; }, function (err) {
               console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
+              return id;
             });
-        }));
+        })).then(function (results) {
+          return results.filter(function (id) { return id !== null; }); // ids whose field write failed
+        });
       });
     });
+  }
+
+  // Add/edit/delete don't wait for the recompute: it reads every month
+  // document and writes work items, which can take long enough on DevOps
+  // Server that the Log Time dialog looked stuck after a successful save.
+  // While it runs a status bar at the bottom of the page says so; a
+  // failure or a recompute that never finishes stays there, so users
+  // notice and report it. Nothing shows when no field is configured.
+  var RECALC_TIMEOUT_MS = 30 * 1000;
+  var recalcsRunning = 0;
+  var recalcDoneTimer = null;
+
+  function recalcInBackground(dataService, witClient, touchedEntries) {
+    var started = false, timer = null;
+    Promise.resolve().then(function () {
+      return recalcTotalHours(dataService, witClient, touchedEntries, function () {
+        started = true;
+        recalcsRunning++;
+        showRecalcStatus("working", "Updating total hours…");
+        timer = setTimeout(function () {
+          showRecalcProblem("The total-hours update has not finished after 30 seconds.");
+        }, RECALC_TIMEOUT_MS);
+      });
+    }).then(function (failedIds) {
+      if (!started) return;
+      finish();
+      if (failedIds && failedIds.length) {
+        showRecalcProblem("The total-hours field could not be updated on " +
+          failedIds.map(function (id) { return "#" + id; }).join(", ") + ".");
+      } else if (!recalcsRunning && !document.querySelector(".tc-recalc-status.error")) {
+        showRecalcStatus("done", "Total hours updated.");
+        recalcDoneTimer = setTimeout(hideRecalcStatus, 3000);
+      }
+    }, function (err) {
+      if (started) finish();
+      console.warn("[TimeCore] Total-hours recompute failed", err);
+      showRecalcProblem("The total-hours update failed: " + (err && err.message ? err.message : err));
+    });
+
+    function finish() {
+      clearTimeout(timer);
+      recalcsRunning--;
+    }
+  }
+
+  function showRecalcProblem(text) {
+    showRecalcStatus("error", "Your time entry was saved. " + text + " Please let your Time Tracker admin know.");
+  }
+
+  // state: "working" | "done" | "error"
+  function showRecalcStatus(state, text) {
+    clearTimeout(recalcDoneTimer);
+    var bar = document.getElementById("tcRecalcStatus");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "tcRecalcStatus";
+      bar.innerHTML = '<span class="tc-recalc-text"></span>' +
+        '<button class="tc-modal-close" title="Dismiss">&#x2715;</button>';
+      bar.querySelector("button").addEventListener("click", hideRecalcStatus);
+      document.body.appendChild(bar);
+    }
+    bar.className = "tc-recalc-status " + state;
+    bar.querySelector(".tc-recalc-text").textContent = text;
+  }
+
+  function hideRecalcStatus() {
+    var bar = document.getElementById("tcRecalcStatus");
+    if (bar) bar.remove();
   }
 
   var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
@@ -512,7 +589,8 @@
             return e.id === entryId ? newEntry : e;
           });
           return dataService.setValue(originalKey, updated, { scopeType: "Default" }).then(function (result) {
-            return recalcTotalHours(dataService, witClient, [oldEntry, newEntry]).then(function () { return result; });
+            recalcInBackground(dataService, witClient, [oldEntry, newEntry]);
+            return result;
           });
         });
       });
@@ -529,7 +607,8 @@
         var updatedEntry = Object.assign({}, refreshed, updates);
         return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
           return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" }).then(function (result) {
-            return recalcTotalHours(dataService, witClient, [entryToMove, updatedEntry]).then(function () { return result; });
+            recalcInBackground(dataService, witClient, [entryToMove, updatedEntry]);
+            return result;
           });
         });
       });

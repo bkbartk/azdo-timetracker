@@ -303,6 +303,23 @@ tr:hover td {
 .edit-modal-content textarea { width: 100%; box-sizing: border-box; }
 .edit-modal-actions { display: flex; gap: 8px; }
 
+/* Bottom bar for the background total-hours update (time-core.js) */
+.tc-recalc-status {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+  border-top: 2px solid;
+}
+.tc-recalc-status .tc-recalc-text { flex: 1; }
+.tc-recalc-status.working { background: var(--info-bg);    border-color: var(--info-border);  color: var(--info-text); }
+.tc-recalc-status.done    { background: var(--success-bg); border-color: var(--success-text); color: var(--success-text); }
+.tc-recalc-status.error   { background: var(--error-bg);   border-color: var(--error-border); color: var(--error-text); }
+
 /* Table links */
 td a { color: var(--accent); text-decoration: none; }
 td a:hover { text-decoration: underline; }
