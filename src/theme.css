@@ -444,3 +444,53 @@ td a:hover { text-decoration: underline; }
 .tc-selected-chip.locked { cursor: default; }
 .tc-selected-chip.locked:hover { border-color: var(--border) !important; background: var(--bg-header) !important; }
 .tc-selected-chip.locked .tc-chip-pencil { display: none; }
+
+/* Tab bar (Time Reports views, Settings sections) */
+.tabs {
+  display: flex;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 12px 24px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: var(--text-secondary);
+}
+
+.tab:hover { color: var(--accent); }
+
+.tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Top-level hub navigation (My Time / Time Reports / Settings) in hub.html */
+.hub-nav {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.hub-nav-item {
+  padding: 10px 20px;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  font-size: 15px;
+  color: var(--text-secondary);
+}
+
+.hub-nav-item:hover { color: var(--text-primary); }
+
+.hub-nav-item.active {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+}

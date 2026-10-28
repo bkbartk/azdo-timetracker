@@ -11,7 +11,6 @@
 </head>
 <body>
 
-  <h1>Settings</h1>
   <p id="subtitle" class="subtitle">Configure weekly hour summary emails.</p>
 
   <div id="checkingAdmin">Checking permissions&hellip;</div>
@@ -24,134 +23,212 @@
   </div>
 
   <div id="mainContent">
-    <div class="info-box">
-      Users who have logged time appear automatically. You can also add users manually below.
-      The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
+    <div class="tabs">
+      <div class="tab active" data-panel="notificationsPanel" onclick="switchTab('notificationsPanel')">Email Notifications</div>
+      <div class="tab" data-panel="loggingPanel" onclick="switchTab('loggingPanel')">Time Logging</div>
     </div>
 
-    <!-- Schedule -->
-    <div class="card">
-      <h2>Schedule</h2>
-      <div class="schedule-row">
-        <div class="schedule-group">
-          <label for="scheduleDay">Send on</label>
-          <select id="scheduleDay" onchange="updateUtcPreview()">
-            <option value="1">Monday</option>
-            <option value="2">Tuesday</option>
-            <option value="3">Wednesday</option>
-            <option value="4">Thursday</option>
-            <option value="5">Friday</option>
-            <option value="6">Saturday</option>
-            <option value="0">Sunday</option>
-          </select>
+    <!-- Tab: email notifications -->
+    <div id="notificationsPanel" class="tab-panel active">
+      <div class="info-box">
+        Users who have logged time appear automatically. You can also add users manually below.
+        The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
+      </div>
+
+      <!-- Schedule -->
+      <div class="card">
+        <h2>Schedule</h2>
+        <div class="schedule-row">
+          <div class="schedule-group">
+            <label for="scheduleDay">Send on</label>
+            <select id="scheduleDay" onchange="updateUtcPreview()">
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+              <option value="0">Sunday</option>
+            </select>
+          </div>
+          <div class="schedule-group">
+            <label for="scheduleTime">At (local time)</label>
+            <input type="time" id="scheduleTime" value="10:00" oninput="updateUtcPreview()">
+          </div>
         </div>
-        <div class="schedule-group">
-          <label for="scheduleTime">At (local time)</label>
-          <input type="time" id="scheduleTime" value="10:00" oninput="updateUtcPreview()">
+        <p id="utcPreview" class="note"></p>
+        <p class="note">
+          The pipeline runs hourly and checks this setting at runtime — no YAML edits needed.<br>
+          To <strong>test</strong>: run the pipeline manually and set <code>override_week_start</code> to any Monday (YYYY-MM-DD).
+        </p>
+      </div>
+
+      <!-- Manager digest -->
+      <div class="card">
+        <h2>Manager Digest</h2>
+        <label class="check-row">
+          <input type="checkbox" id="digestEnabled">
+          Send one team overview to managers: last week per person, plus a 4-week trend
+        </label>
+        <div class="schedule-row">
+          <div class="schedule-group">
+            <label for="digestDay">Send on</label>
+            <select id="digestDay" onchange="updateUtcPreview()">
+              <option value="1">Monday</option>
+              <option value="2" selected>Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+              <option value="0">Sunday</option>
+            </select>
+          </div>
+          <div class="schedule-group">
+            <label for="digestTime">At (local time)</label>
+            <input type="time" id="digestTime" value="07:00" oninput="updateUtcPreview()">
+          </div>
+          <div class="schedule-group field-group">
+            <label for="digestRecipients">Recipients, comma-separated</label>
+            <input type="text" id="digestRecipients" placeholder="manager@company.com">
+          </div>
+        </div>
+        <p id="digestUtcPreview" class="note"></p>
+        <p class="note">
+          Covers everyone with <strong>Send Email</strong> ticked below. Send it a day after the weekly summary,
+          so people get a day to fix their hours first. Saved with the <strong>Save</strong> button below.
+        </p>
+      </div>
+
+      <!-- Daily reminder -->
+      <div class="card">
+        <h2>Daily Reminder</h2>
+        <label class="check-row">
+          <input type="checkbox" id="dailyEnabled">
+          Every weekday, email people whose previous working day came out short
+        </label>
+        <div class="schedule-row">
+          <div class="schedule-group">
+            <label for="dailyTime">At (local time, Mon&ndash;Fri)</label>
+            <input type="time" id="dailyTime" value="07:00" oninput="updateUtcPreview()">
+          </div>
+        </div>
+        <p id="dailyUtcPreview" class="note"></p>
+        <p class="note">
+          A day is short when it has fewer hours than the user's <strong>Hours Mon&ndash;Fri</strong> for that day
+          (e.g. <code>8 8 4 8 8</code>), else their target divided over five days, else when it has no hours at all.
+          Monday checks the previous Friday. If nobody logged anything that day (a public holiday), no reminders are sent.
+        </p>
+      </div>
+
+      <!-- Users -->
+      <div class="card" id="usersCard">
+        <h2>User Notification Configuration</h2>
+        <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
+        <div id="tableContainer" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-name">Name</th>
+                <th class="col-email">Email</th>
+                <th class="col-send">Send Email</th>
+                <th class="col-target">Target h/w</th>
+                <th class="col-days" title="Hours per weekday, Mon to Fri, e.g. 8 8 4 8 8. Empty = target spread evenly over Mon–Fri.">Hours Mon&ndash;Fri</th>
+                <th>CC &mdash; manager(s), comma-separated</th>
+              </tr>
+            </thead>
+            <tbody id="userTableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none">
+          No users yet. Add one below or wait for someone to log their first hour.
+        </div>
+        <div class="add-user-row">
+          <div class="add-user-search-wrap">
+            <input type="text" id="addUserSearch" placeholder="Search ADO users to add&hellip;" autocomplete="off">
+            <div id="addUserResults" class="add-user-results" style="display:none"></div>
+          </div>
+          <span id="addUserMsg" class="status"></span>
+        </div>
+        <div class="btn-row">
+          <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
+          <span id="statusMsg" class="status"></span>
         </div>
       </div>
-      <p id="utcPreview" class="note"></p>
-      <p class="note">
-        The pipeline runs hourly and checks this setting at runtime — no YAML edits needed.<br>
-        To <strong>test</strong>: run the pipeline manually and set <code>override_week_start</code> to any Monday (YYYY-MM-DD).
-      </p>
     </div>
 
-    <!-- Logging rules -->
-    <div class="card">
-      <h2>Logging Rules</h2>
-      <label class="check-row">
-        <input type="checkbox" id="blockEpicLogging" onchange="saveBlockEpicLogging()" disabled>
-        Don't allow logging time directly on Epics
-        <span id="blockEpicStatus" class="status"></span>
-      </label>
-      <p class="note">
-        New time must go on a Feature, User Story or Task under the epic; its hours still roll up
-        to the epic in reports. Existing entries on Epics are kept and can still be edited.
-      </p>
-      <div class="schedule-row">
-        <div class="schedule-group">
-          <label for="editWindowDays">Edit window (days back)</label>
-          <input type="number" id="editWindowDays" min="0" max="3650" step="1" placeholder="no limit"
-                 onchange="saveEditWindowDays()" disabled>
+    <!-- Tab: time logging -->
+    <div id="loggingPanel" class="tab-panel">
+      <!-- Logging rules -->
+      <div class="card">
+        <h2>Logging Rules</h2>
+        <label class="check-row">
+          <input type="checkbox" id="blockEpicLogging" onchange="saveBlockEpicLogging()" disabled>
+          Don't allow logging time directly on Epics
+          <span id="blockEpicStatus" class="status"></span>
+        </label>
+        <p class="note">
+          New time must go on a Feature, User Story or Task under the epic; its hours still roll up
+          to the epic in reports. Existing entries on Epics are kept and can still be edited.
+        </p>
+        <div class="schedule-row">
+          <div class="schedule-group">
+            <label for="editWindowDays">Edit window (days back)</label>
+            <input type="number" id="editWindowDays" min="0" max="3650" step="1" placeholder="no limit"
+                   onchange="saveEditWindowDays()" disabled>
+          </div>
+          <span id="editWindowStatus" class="status" style="align-self:flex-end"></span>
         </div>
-        <span id="editWindowStatus" class="status" style="align-self:flex-end"></span>
+        <p class="note">
+          When set (e.g. <code>14</code>), entries dated more than that many days ago can't be added,
+          edited or deleted by anyone. Leave empty for no limit.
+        </p>
       </div>
-      <p class="note">
-        When set (e.g. <code>14</code>), entries dated more than that many days ago can't be added,
-        edited or deleted by anyone. Leave empty for no limit.
-      </p>
-    </div>
 
-    <!-- Work item fields -->
-    <div class="card">
-      <h2>Work Item Fields</h2>
-      <div class="schedule-row">
-        <div class="schedule-group field-group">
-          <label for="projectField">Project</label>
-          <select id="projectField" class="field-select"></select>
+      <!-- Work item fields -->
+      <div class="card">
+        <h2>Work Item Fields</h2>
+        <div class="schedule-row">
+          <div class="schedule-group field-group">
+            <label for="projectField">Project</label>
+            <select id="projectField" class="field-select"></select>
+          </div>
+          <div class="schedule-group field-group">
+            <label for="clientField">Client</label>
+            <select id="clientField" class="field-select"></select>
+          </div>
+          <div class="schedule-group field-group">
+            <label for="totalHoursField">Total logged hours</label>
+            <select id="totalHoursField" class="field-select"></select>
+          </div>
         </div>
-        <div class="schedule-group field-group">
-          <label for="clientField">Client</label>
-          <select id="clientField" class="field-select"></select>
+        <p class="note">
+          <strong>Project / Client</strong> — the field each time entry takes its Project and Client
+          from: the logged work item's own value, else the nearest parent's (up to the epic). The
+          default looks for <code>Custom.Project</code> / <code>Custom.Client</code>.<br>
+          <strong>Total logged hours</strong> — when set, every add, edit or delete recomputes this
+          field from scratch on the logged work item and every parent up to the epic, so an epic's
+          value is its own hours plus every descendant's. Leave disabled to turn it off.<br><br>
+          <strong>After changing a field</strong>, go to Time Reports, widen the date filter to your
+          full history and click <strong>Re-sync</strong> once to bring existing entries and totals up to date.
+        </p>
+        <div class="btn-row">
+          <button id="fieldsSaveBtn" onclick="saveWorkItemFields()">Save</button>
+          <span id="fieldsStatus" class="status"></span>
         </div>
-        <div class="schedule-group field-group">
-          <label for="totalHoursField">Total logged hours</label>
-          <select id="totalHoursField" class="field-select"></select>
-        </div>
-      </div>
-      <p class="note">
-        <strong>Project / Client</strong> — the field each time entry takes its Project and Client
-        from: the logged work item's own value, else the nearest parent's (up to the epic). The
-        default looks for <code>Custom.Project</code> / <code>Custom.Client</code>.<br>
-        <strong>Total logged hours</strong> — when set, every add, edit or delete recomputes this
-        field from scratch on the logged work item and every parent up to the epic, so an epic's
-        value is its own hours plus every descendant's. Leave disabled to turn it off.<br><br>
-        <strong>After changing a field</strong>, go to Time Reports, widen the date filter to your
-        full history and click <strong>Re-sync</strong> once to bring existing entries and totals up to date.
-      </p>
-      <div class="btn-row">
-        <button id="fieldsSaveBtn" onclick="saveWorkItemFields()">Save</button>
-        <span id="fieldsStatus" class="status"></span>
-      </div>
-    </div>
-
-    <!-- Users -->
-    <div class="card" id="usersCard">
-      <h2>User Notification Configuration</h2>
-      <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
-      <div id="tableContainer" style="display:none">
-        <table>
-          <thead>
-            <tr>
-              <th class="col-name">Name</th>
-              <th class="col-email">Email</th>
-              <th class="col-send">Send Email</th>
-              <th class="col-target">Target h/w</th>
-              <th>CC &mdash; manager(s), comma-separated</th>
-            </tr>
-          </thead>
-          <tbody id="userTableBody"></tbody>
-        </table>
-      </div>
-      <div id="emptyState" class="empty-state" style="display:none">
-        No users yet. Add one below or wait for someone to log their first hour.
-      </div>
-      <div class="add-user-row">
-        <div class="add-user-search-wrap">
-          <input type="text" id="addUserSearch" placeholder="Search ADO users to add&hellip;" autocomplete="off">
-          <div id="addUserResults" class="add-user-results" style="display:none"></div>
-        </div>
-        <span id="addUserMsg" class="status"></span>
-      </div>
-      <div class="btn-row">
-        <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
-        <span id="statusMsg" class="status"></span>
       </div>
     </div>
   </div>
 
   <script>
+    function switchTab(panelId) {
+      document.querySelectorAll('.tab').forEach(function(t) {
+        t.classList.toggle('active', t.getAttribute('data-panel') === panelId);
+      });
+      document.querySelectorAll('.tab-panel').forEach(function(p) {
+        p.classList.toggle('active', p.id === panelId);
+      });
+    }
+
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
@@ -295,7 +372,7 @@
           function(cfg) {
             if (!cfg) return;
             ((cfg.users) || []).forEach(function(u) {
-              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0 };
+              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0, daySchedule: u.daySchedule || null };
               // Restore any user that was in a previous save (e.g. manually added, or outside the 3-month window)
               if (u.userId && !knownUsers[u.userId]) {
                 knownUsers[u.userId] = { userId: u.userId, userName: u.userName || '', userEmail: u.userEmail || '' };
@@ -304,6 +381,16 @@
             if (cfg.schedule) {
               document.getElementById('scheduleDay').value  = cfg.schedule.day  !== undefined ? cfg.schedule.day  : 1;
               document.getElementById('scheduleTime').value = cfg.schedule.time || '10:00';
+            }
+            if (cfg.managerDigest) {
+              document.getElementById('digestEnabled').checked  = !!cfg.managerDigest.enabled;
+              document.getElementById('digestDay').value        = cfg.managerDigest.day !== undefined ? cfg.managerDigest.day : 2;
+              document.getElementById('digestTime').value       = cfg.managerDigest.time || '07:00';
+              document.getElementById('digestRecipients').value = cfg.managerDigest.recipients || '';
+            }
+            if (cfg.dailyReminder) {
+              document.getElementById('dailyEnabled').checked = !!cfg.dailyReminder.enabled;
+              document.getElementById('dailyTime').value      = cfg.dailyReminder.time || '07:00';
             }
             updateUtcPreview();
             updateSubtitle(cfg.schedule);
@@ -328,38 +415,46 @@
         'Configure weekly hour summary emails — sent every ' + dayName + ' at ' + time + ' (local).';
     }
 
-    // Compute UTC day+hour from the currently selected local day/time and update the preview label.
+    var WEEKDAYS = [1, 2, 3, 4, 5];
+
+    function utcLabel(utc) {
+      return String(utc.utcHour).padStart(2, '0') + ':' + String(utc.utcMin).padStart(2, '0') + ' UTC';
+    }
+
+    // Update the schedules' UTC preview labels from the selected local day/time.
     function updateUtcPreview() {
-      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
-      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
+      [['scheduleDay', 'scheduleTime', 'utcPreview'], ['digestDay', 'digestTime', 'digestUtcPreview']].forEach(function(ids) {
+        var utc = computeUtcSchedule(ids[0], ids[1]);
+        document.getElementById(ids[2]).textContent =
+          'Pipeline will send at: ' + DAY_NAMES[utc.utcDay] + ' ' + utcLabel(utc);
+      });
+      var daily = computeUtcDays(WEEKDAYS, document.getElementById('dailyTime').value);
+      document.getElementById('dailyUtcPreview').textContent =
+        'Pipeline will send at: ' + daily.utcDays.map(function(d) { return DAY_NAMES[d].slice(0, 3); }).join('/') +
+        ' ' + utcLabel(daily);
+    }
+
+    // UTC days + hour for a local time on each of the given local weekdays.
+    function computeUtcDays(localDays, time) {
+      var utcs = localDays.map(function(day) { return computeUtcFor(day, time); });
+      return { utcDays: utcs.map(function(u) { return u.utcDay; }), utcHour: utcs[0].utcHour, utcMin: utcs[0].utcMin };
+    }
+
+    // UTC day+hour of the next occurrence of the local day/time in the given inputs.
+    function computeUtcSchedule(dayId, timeId) {
+      return computeUtcFor(parseInt(document.getElementById(dayId).value, 10), document.getElementById(timeId).value);
+    }
+
+    function computeUtcFor(localDay, time) {
+      var timeParts = (time || '10:00').split(':');
       var localHour = parseInt(timeParts[0], 10) || 0;
       var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
-
       // Build a date that falls on the chosen local weekday
       var d = new Date();
       var daysUntil = (localDay - d.getDay() + 7) % 7;
       d.setDate(d.getDate() + daysUntil);
       d.setHours(localHour, localMin, 0, 0);
-
-      var utcDay  = d.getUTCDay();
-      var utcHour = d.getUTCHours();
-      var utcMin  = d.getUTCMinutes();
-
-      document.getElementById('utcPreview').textContent =
-        'Pipeline will send at: ' + DAY_NAMES[utcDay] + ' ' +
-        String(utcHour).padStart(2, '0') + ':' + String(utcMin).padStart(2, '0') + ' UTC';
-    }
-
-    function computeUtcSchedule() {
-      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
-      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
-      var localHour = parseInt(timeParts[0], 10) || 0;
-      var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
-      var d = new Date();
-      var daysUntil = (localDay - d.getDay() + 7) % 7;
-      d.setDate(d.getDate() + daysUntil);
-      d.setHours(localHour, localMin, 0, 0);
-      return { utcDay: d.getUTCDay(), utcHour: d.getUTCHours() };
+      return { utcDay: d.getUTCDay(), utcHour: d.getUTCHours(), utcMin: d.getUTCMinutes() };
     }
 
     // -------------------------------------------------------------------------
@@ -393,6 +488,7 @@
           '<td class="text-muted">' + escHtml(u.userEmail) + '</td>' +
           '<td class="toggle-cell"><input type="checkbox" id="chk_' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '></td>' +
           '<td class="target-cell"><input type="number" id="tgt_' + uid + '" value="' + (cfg.targetHours || '') + '" min="0" max="80" step="0.5" placeholder="—"></td>' +
+          '<td><input type="text" id="sch_' + uid + '" value="' + (cfg.daySchedule ? cfg.daySchedule.join(' ') : '') + '" placeholder="8 8 8 8 8"></td>' +
           '<td><input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com"></td>';
         tbody.appendChild(tr);
       });
@@ -405,6 +501,15 @@
     // Save
     // -------------------------------------------------------------------------
 
+    // "8 8 4 8 8" (spaces, commas or semicolons) -> [8, 8, 4, 8, 8]; empty -> null; anything else -> undefined.
+    function parseDaySchedule(text) {
+      var parts = String(text || '').trim().split(/[\s,;]+/).filter(Boolean);
+      if (!parts.length) return null;
+      var hours = parts.map(function(p) { return parseFloat(p); });
+      var ok = hours.length === 5 && hours.every(function(h) { return !isNaN(h) && h >= 0 && h <= 24; });
+      return ok ? hours : undefined;
+    }
+
     function saveConfig() {
       var btn    = document.getElementById('saveBtn');
       var status = document.getElementById('statusMsg');
@@ -412,21 +517,33 @@
       status.className = 'status';
       status.textContent = 'Saving…';
 
+      var invalid = [];
       var users = Object.keys(knownUsers).map(function(k) {
         var u = knownUsers[k];
         var tgtEl = document.getElementById('tgt_' + u.userId);
         var tgt   = tgtEl ? parseFloat(tgtEl.value) : NaN;
+        var sched = parseDaySchedule((document.getElementById('sch_' + u.userId) || {}).value);
+        if (sched === undefined) invalid.push(u.userName || u.userEmail);
+        // A day schedule without a weekly target implies one
+        if ((isNaN(tgt) || tgt <= 0) && sched) tgt = sched.reduce(function(s, h) { return s + h; }, 0);
         return {
           userId:       u.userId,
           userName:     u.userName,
           userEmail:    u.userEmail,
           emailEnabled: !!(document.getElementById('chk_' + u.userId) || {}).checked,
           targetHours:  isNaN(tgt) ? 0 : tgt,
+          daySchedule:  sched || null,
           cc:           ((document.getElementById('cc_' + u.userId) || {}).value || '').trim()
         };
       });
+      if (invalid.length) {
+        status.className = 'status error';
+        status.textContent = 'Hours Mon–Fri needs five numbers, e.g. "8 8 4 8 8" — check: ' + invalid.join(', ');
+        btn.disabled = false;
+        return;
+      }
 
-      var utc = computeUtcSchedule();
+      var utc = computeUtcSchedule('scheduleDay', 'scheduleTime');
       var schedule = {
         day:     parseInt(document.getElementById('scheduleDay').value, 10),
         time:    document.getElementById('scheduleTime').value,
@@ -434,7 +551,25 @@
         utcHour: utc.utcHour
       };
 
-      window.dataService.setValue(CONFIG_KEY, { users: users, schedule: schedule }, { scopeType: 'Default' })
+      var digestUtc = computeUtcSchedule('digestDay', 'digestTime');
+      var managerDigest = {
+        enabled:    document.getElementById('digestEnabled').checked,
+        recipients: document.getElementById('digestRecipients').value.trim(),
+        day:        parseInt(document.getElementById('digestDay').value, 10),
+        time:       document.getElementById('digestTime').value,
+        utcDay:     digestUtc.utcDay,
+        utcHour:    digestUtc.utcHour
+      };
+
+      var dailyUtc = computeUtcDays(WEEKDAYS, document.getElementById('dailyTime').value);
+      var dailyReminder = {
+        enabled: document.getElementById('dailyEnabled').checked,
+        time:    document.getElementById('dailyTime').value,
+        utcDays: dailyUtc.utcDays,
+        utcHour: dailyUtc.utcHour
+      };
+
+      window.dataService.setValue(CONFIG_KEY, { users: users, schedule: schedule, managerDigest: managerDigest, dailyReminder: dailyReminder }, { scopeType: 'Default' })
         .then(function() {
           updateSubtitle(schedule);
           status.className = 'status success';

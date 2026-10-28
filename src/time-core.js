@@ -58,6 +58,33 @@
     return out;
   }
 
+  // ---- Embedded in the hub shell -----------------------------------------
+  // hub.html is the single Boards hub. It calls VSS.init once and shows
+  // My Time, Time Reports and Settings in same-origin child iframes, so
+  // switching tabs doesn't reload anything. A child page can't handshake
+  // with Azure DevOps itself (its parent is the shell, not the host), so
+  // here VSS is swapped for the shell's already-initialised SDK:
+  //  - init / notifyLoadSucceeded are no-ops (the shell did both);
+  //  - the Navigation service is replaced by one scoped to this page, so
+  //    each page's filter hash lives next to "view=..." in the host URL.
+  var hubShell = null;
+  try { if (global.parent !== global && global.parent.TimeTrackerHub) hubShell = global.parent.TimeTrackerHub; } catch (e) {}
+  if (hubShell) {
+    var hostVSS = global.parent.VSS;
+    var pageFile = global.location.pathname.split("/").pop();
+    var embeddedVSS = {};
+    Object.keys(hostVSS).forEach(function (k) {
+      embeddedVSS[k] = typeof hostVSS[k] === "function" ? hostVSS[k].bind(hostVSS) : hostVSS[k];
+    });
+    embeddedVSS.init = function () {};
+    embeddedVSS.notifyLoadSucceeded = function () {};
+    embeddedVSS.getService = function (serviceId) {
+      if (serviceId === hostVSS.ServiceIds.Navigation) return Promise.resolve(hubShell.navigationFor(pageFile));
+      return hostVSS.getService.apply(hostVSS, arguments);
+    };
+    global.VSS = embeddedVSS;
+  }
+
   function checkIsAdmin() {
     var ctx = VSS.getWebContext();
     var base = ctx.collection.uri.replace(/\/$/, '');

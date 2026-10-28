@@ -5,6 +5,10 @@
  *
  * Reads notification config and time entries from the Azure DevOps Extension
  * Data REST API, then sends one HTML email per enabled user via SMTP.
+ * When the manager digest is enabled it also sends one team overview (last
+ * week per person + a 4-week trend) to the configured managers, on its own
+ * day/time. And each weekday morning (when enabled) it reminds everyone whose
+ * previous working day came out short. All schedules live in Notification Settings.
  *
  * Required environment variables:
  *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
@@ -20,6 +24,9 @@
  *   SMTP_USER         SMTP auth username   (default: none)
  *   SMTP_PASS         SMTP auth password   (default: none)
  *   DRY_RUN           true = log only, no emails sent (default: false)
+ *   MAILS             all | personal | digest | daily — which mails a run may send (default: all)
+ *   OVERRIDE_DAY      YYYY-MM-DD — send the daily reminder for this day now, ignoring its schedule
+ *   TIMETRACKER_URL   Link added to the daily reminder (default: none)
  */
 
 const https     = require('https');
@@ -44,6 +51,10 @@ const SMTP_USER        = process.env.SMTP_USER         || null;
 const SMTP_PASS        = process.env.SMTP_PASS         || null;
 const DRY_RUN             = process.env.DRY_RUN === 'true';
 const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
+const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY || '').trim()) ? process.env.OVERRIDE_DAY.trim() : '';
+const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
+const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
+const TREND_WEEKS         = 4;
 
 const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
 
@@ -78,6 +89,48 @@ function getLastWeekRange() {
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
   return { start: monday, end: sunday };
+}
+
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(d.getDate() + n);
+  return r;
+}
+
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7)); // Thursday of this week decides the year
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+}
+
+/**
+ * The day the daily reminder checks: yesterday, walking back past the weekend,
+ * so a Monday run checks the prior Friday.
+ */
+function getPreviousWorkingDay(now) {
+  let d = addDays(now, -1);
+  while (d.getDay() === 0 || d.getDay() === 6) d = addDays(d, -1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Hours a user is expected to log on a date. Their own Mon–Fri schedule wins
+ * (e.g. [8, 8, 4, 8, 8]); otherwise the weekly target is spread evenly over
+ * Mon–Fri. Null when the user has neither — then any hours at all will do.
+ */
+function dailyExpectation(user, dateStr) {
+  const wd = new Date(dateStr + 'T00:00:00').getDay();
+  if (wd === 0 || wd === 6) return 0;
+  if (Array.isArray(user.daySchedule) && user.daySchedule.length === 5) return Number(user.daySchedule[wd - 1]) || 0;
+  if (user.targetHours > 0) return user.targetHours / 5;
+  return null;
+}
+
+function isShortDay(user, dateStr, logged) {
+  const expected = dailyExpectation(user, dateStr);
+  return expected === null ? logged <= 0 : logged + 0.001 < expected;
 }
 
 function getMonthKeysForRange(start, end) {
@@ -256,8 +309,183 @@ function escHtml(str) {
 }
 
 // ---------------------------------------------------------------------------
+// Manager digest
+// ---------------------------------------------------------------------------
+
+/**
+ * The TREND_WEEKS Monday–Sunday weeks ending with `lastWeekStart`'s week, oldest first.
+ */
+function getTrendWeeks(lastWeekStart) {
+  const weeks = [];
+  for (let i = TREND_WEEKS - 1; i >= 0; i--) {
+    const monday = addDays(lastWeekStart, -7 * i);
+    weeks.push({ monday, start: toDateStr(monday), end: toDateStr(addDays(monday, 6)) });
+  }
+  return weeks;
+}
+
+/**
+ * One row per user: hours per trend week, plus the weekdays of the last week
+ * with nothing logged. Sorted worst first, so the people to talk to are on top;
+ * users without a target go last.
+ */
+function buildDigestRows(users, entries, weeks) {
+  const last = weeks[weeks.length - 1];
+  const rows = users.map(user => {
+    const mine   = entries.filter(e => e.userId === user.userId);
+    const totals = weeks.map(w => mine
+      .filter(e => e.date >= w.start && e.date <= w.end)
+      .reduce((sum, e) => sum + (Number(e.hours) || 0), 0));
+    const missing = [];
+    for (let i = 0; i < 5; i++) { // Mon–Fri
+      const d = addDays(last.monday, i);
+      const dateStr = toDateStr(d);
+      if (dailyExpectation(user, dateStr) === 0) continue; // not a working day for this user
+      if (!mine.some(e => e.date === dateStr && Number(e.hours) > 0)) missing.push(DAY_NAMES[d.getDay()].slice(0, 3));
+    }
+    return { user, totals, missing };
+  });
+  const score = r => r.user.targetHours > 0 ? r.totals[r.totals.length - 1] / r.user.targetHours : Infinity;
+  rows.sort((a, b) => (score(a) - score(b)) || (a.user.userName || '').localeCompare(b.user.userName || ''));
+  return rows;
+}
+
+function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
+  const th = 'padding:9px 10px;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9';
+  const td = 'padding:8px 10px;border-bottom:1px solid #edebe9';
+  const lastIdx = weeks.length - 1;
+
+  const weekHeaders = weeks.map((w, i) => {
+    const locked = editCutoff && w.end < editCutoff;
+    const label  = w.monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return `<th style="${th};text-align:right;${i === lastIdx ? 'background:#e1effa;' : ''}">` +
+           `Wk ${isoWeek(w.monday)}<br><span style="font-weight:400;font-size:11px">${label}${locked ? ' &middot; final' : ''}</span></th>`;
+  }).join('');
+
+  const body = rows.map(r => {
+    const target = r.user.targetHours || 0;
+    const cells = r.totals.map((total, i) => {
+      const { color } = targetStatus(total, target);
+      const pct = target > 0
+        ? `<br><span style="font-size:11px;color:${color}">${Math.round((total / target) * 100)}%</span>`
+        : '';
+      return `<td style="${td};text-align:right;${i === lastIdx ? 'background:#f3f9fd;' : ''}">` +
+             `<span style="font-weight:${i === lastIdx ? 700 : 600};color:${color}">${total.toFixed(1)}</span>${pct}</td>`;
+    }).join('');
+    // Empty days are only a problem when the week falls short — part-timers have them by design
+    const short   = !target || r.totals[lastIdx] < target;
+    const missing = r.missing.length
+      ? `<span style="color:${short ? '#d13438' : '#a19f9d'}">${r.missing.join(', ')}</span>`
+      : `<span style="color:#107c10">&mdash;</span>`;
+    return `
+      <tr>
+        <td style="${td}">${escHtml(r.user.userName)}</td>
+        <td style="${td};text-align:right;color:#605e5c">${target || '&mdash;'}</td>
+        ${cells}
+        <td style="${td}">${missing}</td>
+      </tr>`;
+  }).join('');
+
+  const withTarget = rows.filter(r => r.user.targetHours > 0);
+  const below      = withTarget.filter(r => r.totals[lastIdx] < r.user.targetHours).length;
+  const emptyDays  = rows.reduce((sum, r) => sum + r.missing.length, 0);
+  const summary    = `${below} of ${withTarget.length} people below target last week &middot; ` +
+                     `${emptyDays} weekday${emptyDays === 1 ? '' : 's'} with no hours logged`;
+
+  const lockNote = editCutoff
+    ? ` Entries older than ${editWindowDays} days are locked, so weeks marked <em>final</em> can no longer change.`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+  <div style="max-width:760px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+
+    <div style="background:#0078d4;padding:20px 28px">
+      <h2 style="margin:0;color:white;font-weight:600;font-size:18px">Team Hours Digest</h2>
+      <p style="margin:4px 0 0 0;color:#deecf9;font-size:13px">Last week: ${weeks[lastIdx].start} &ndash; ${weeks[lastIdx].end}</p>
+    </div>
+
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 20px 0;font-weight:600">${summary}</p>
+
+      <table style="width:100%;border-collapse:collapse;border:1px solid #edebe9">
+        <thead>
+          <tr style="background:#f3f2f1">
+            <th style="${th};text-align:left">Name</th>
+            <th style="${th};text-align:right">Target h/w</th>
+            ${weekHeaders}
+            <th style="${th};text-align:left">No hours last week</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+
+      <p style="margin:24px 0 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+        Week totals are recalculated from the current data on every send, so an earlier week that
+        has gone up since the last digest means gaps were filled in afterwards.${lockNote}
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Daily reminder
+// ---------------------------------------------------------------------------
+
+function buildReminderHtml(user, dateStr, logged, expected) {
+  const what = logged > 0
+    ? `you logged <strong>${logged.toFixed(1)} of ${+expected.toFixed(1)} hours</strong>`
+    : `you have <strong>no hours logged</strong>`;
+  const link = TIMETRACKER_URL
+    ? `<p style="margin:0 0 20px 0"><a href="${escHtml(TIMETRACKER_URL)}" style="color:#0078d4">Open Time Tracker</a></p>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+  <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 16px 0">Hi <strong>${escHtml(user.userName)}</strong>,</p>
+      <p style="margin:0 0 20px 0">
+        On <strong>${formatDisplayDate(dateStr)}</strong> ${what} in Time Tracker.
+        Please add the missing hours today.
+      </p>
+      ${link}
+      <p style="margin:0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+        This is an automated daily reminder from Time Tracker.
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+/**
+ * The pipeline runs hourly; the script decides whether it's send time.
+ * A schedule matches on its utcDay, or on any of its utcDays (daily reminder).
+ * A schedule without a UTC day/hour (saved by an old settings page) always matches.
+ */
+function scheduleMatches(label, sched, now) {
+  const days = sched && (sched.utcDays || (sched.utcDay !== undefined ? [sched.utcDay] : null));
+  if (!days || sched.utcHour === undefined) return true;
+  const curDay  = now.getUTCDay();
+  const curHour = now.getUTCHours();
+  if (!days.includes(curDay) || curHour !== sched.utcHour) {
+    console.log(`${label}: not send time. Configured: ${days.map(d => DAY_NAMES[d].slice(0, 3)).join('/')} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC.`);
+    return false;
+  }
+  console.log(`${label}: schedule matched — proceeding.`);
+  return true;
+}
 
 async function main() {
   // Validate required env vars
@@ -291,21 +519,29 @@ async function main() {
   const config = await fetchDocument('notification-config', true);
   console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
   console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
+  console.log(`[DEBUG] config.managerDigest: ${JSON.stringify((config && config.managerDigest) || null)}`);
+  console.log(`[DEBUG] config.dailyReminder: ${JSON.stringify((config && config.dailyReminder) || null)}`);
 
-  // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
-  // Skipped when OVERRIDE_WEEK_START is set (manual test run).
+  const digestCfg        = (config && config.managerDigest) || {};
+  const digestRecipients = (digestCfg.recipients || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const dailyCfg         = (config && config.dailyReminder) || {};
+  let sendPersonal = MAILS === 'all' || MAILS === 'personal';
+  let sendDigest   = (MAILS === 'all' || MAILS === 'digest') && !!digestCfg.enabled && digestRecipients.length > 0;
+  let sendDaily    = (MAILS === 'all' || MAILS === 'daily') && !!dailyCfg.enabled;
+
+  // Schedule checks are skipped for a manual test run: OVERRIDE_WEEK_START for
+  // the weekly summary and digest, OVERRIDE_DAY for the daily reminder.
+  const now = new Date();
   if (!OVERRIDE_WEEK_START) {
-    const sched = config && config.schedule;
-    if (sched && sched.utcDay !== undefined && sched.utcHour !== undefined) {
-      const now     = new Date();
-      const curDay  = now.getUTCDay();
-      const curHour = now.getUTCHours();
-      if (curDay !== sched.utcDay || curHour !== sched.utcHour) {
-        console.log(`Not send time. Configured: ${DAY_NAMES[sched.utcDay]} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC. Nothing to do.`);
-        return;
-      }
-      console.log('Schedule matched — proceeding.');
-    }
+    sendPersonal = sendPersonal && scheduleMatches('Weekly summary', config && config.schedule, now);
+    sendDigest   = sendDigest   && scheduleMatches('Manager digest', digestCfg, now);
+  }
+  if (!OVERRIDE_DAY) {
+    sendDaily = sendDaily && scheduleMatches('Daily reminder', dailyCfg, now);
+  }
+  if (!sendPersonal && !sendDigest && !sendDaily) {
+    console.log('Nothing to do.');
+    return;
   }
 
   const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
@@ -316,8 +552,16 @@ async function main() {
   }
   console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
 
-  // Load time entries for the relevant month(s)
-  const monthKeys = getMonthKeysForRange(start, end);
+  // Load time entries for the relevant month(s) — the digest reaches back TREND_WEEKS weeks
+  const weeks     = getTrendWeeks(start);
+  const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(now);
+  const dailyStr  = toDateStr(dailyDay);
+  const ranges    = [];
+  if (sendPersonal) ranges.push([start, end]);
+  if (sendDigest)   ranges.push([weeks[0].monday, end]);
+  if (sendDaily)    ranges.push([dailyDay, dailyDay]);
+  const monthKeys = getMonthKeysForRange(
+    new Date(Math.min(...ranges.map(r => r[0]))), new Date(Math.max(...ranges.map(r => r[1]))));
   let allEntries = [];
   for (const key of monthKeys) {
     const entries = await fetchDocument(key);
@@ -353,7 +597,7 @@ async function main() {
   const transporter = nodemailer.createTransport(transportOptions);
 
   // Pre-build all mail objects so the retry loop only deals with transport errors.
-  const mails = enabledUsers.map(user => {
+  const personalMails = !sendPersonal ? [] : enabledUsers.map(user => {
     const entries = byUser[user.userId] || [];
     const days = [];
     for (let i = 0; i < 7; i++) {
@@ -374,12 +618,64 @@ async function main() {
         cc:      ccList.length ? ccList.join(', ') : undefined,
         subject: `Weekly Hours Summary: ${startStr} – ${endStr}`,
         html:    buildEmailHtml(user, days, startStr, endStr),
+        // High importance (Outlook's red "!") only when the week fell short of the target
+        priority: user.targetHours > 0 && total < user.targetHours ? 'high' : 'normal',
       }
     };
   });
 
+  const mails = personalMails;
+  if (sendDigest) {
+    const settings       = (await fetchDocument('timetracker_settings')) || {};
+    const editWindowDays = parseInt(settings.editWindowDays, 10);
+    const editCutoff     = isNaN(editWindowDays) || editWindowDays < 0 ? null : toDateStr(addDays(new Date(), -editWindowDays));
+    const rows           = buildDigestRows(enabledUsers, allEntries, weeks);
+    for (const r of rows) {
+      console.log(`Digest: ${r.user.userName} — ${r.totals.map(t => t.toFixed(1)).join(' / ')} h` +
+                  (r.missing.length ? `  | no hours: ${r.missing.join(', ')}` : ''));
+    }
+    mails.push({
+      total: rows.reduce((s, r) => s + r.totals[r.totals.length - 1], 0),
+      mailOptions: {
+        from:    SMTP_FROM,
+        to:      digestRecipients.join(', '),
+        subject: `Team Hours Digest: ${startStr} – ${endStr}`,
+        html:    buildDigestHtml(rows, weeks, editCutoff, editWindowDays),
+      }
+    });
+  }
+
+  if (sendDaily) {
+    const logged = {};
+    allEntries.filter(e => e.date === dailyStr).forEach(e => {
+      logged[e.userId] = (logged[e.userId] || 0) + (Number(e.hours) || 0);
+    });
+    // Nobody logging anything means a public holiday or company day off, not a team-wide lapse
+    if (!enabledUsers.some(u => logged[u.userId] > 0)) {
+      console.log(`Daily reminder: nobody logged hours on ${dailyStr} — treating it as a day off, no reminders.`);
+    } else {
+      for (const user of enabledUsers) {
+        const hours = logged[user.userId] || 0;
+        if (!isShortDay(user, dailyStr, hours)) continue;
+        const expected = dailyExpectation(user, dailyStr);
+        console.log(`Daily reminder: ${user.userName} logged ${hours.toFixed(1)} h on ${dailyStr}` +
+                    (expected !== null ? ` (expected ${+expected.toFixed(1)})` : ''));
+        mails.push({
+          total: hours,
+          mailOptions: {
+            from:    SMTP_FROM,
+            to:      user.userEmail,
+            subject: `Time Tracker: hours missing for ${formatDisplayDate(dailyStr)}`,
+            html:    buildReminderHtml(user, dailyStr, hours, expected),
+            priority: 'high',
+          }
+        });
+      }
+    }
+  }
+
   if (DRY_RUN) {
-    for (const { user, total, mailOptions } of mails) {
+    for (const { total, mailOptions } of mails) {
       console.log(`[DRY RUN] → ${mailOptions.to}${mailOptions.cc ? '  CC: ' + mailOptions.cc : ''}  |  Total: ${total.toFixed(1)} h`);
     }
     console.log(`Done (dry run). Would send: ${mails.length}.`);

@@ -22,8 +22,17 @@ h1 { flex-shrink: 0; margin: 0 0 6px 0; font-weight: 600; }
   flex: 1;
   flex-direction: column;
   min-height: 0;
+}
+
+/* Only the active tab's panel is shown; it fills the space under the tab bar */
+.tab-panel {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
   overflow-y: auto; /* scrolls once the cards no longer fit */
 }
+.tab-panel.active { display: flex; }
 
 .info-box { flex-shrink: 0; }
 
@@ -131,10 +140,12 @@ input[type="text"] { width: 100%; box-sizing: border-box; }
 .col-email  { width: 240px; }
 .col-send   { width: 110px; text-align: center; }
 .col-target { width: 90px; text-align: center; }
+.col-days   { width: 120px; }
 .target-cell { text-align: center; }
 .target-cell input { width: 64px; text-align: right; }
 
 .schedule-row  { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+.note + .schedule-row { margin-top: 16px; }
 .schedule-group { display: flex; flex-direction: column; gap: 4px; }
 .schedule-group label { font-weight: 600; font-size: 12px; color: var(--text-secondary); }
 
