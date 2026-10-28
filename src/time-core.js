@@ -301,6 +301,13 @@
   // below — keeps a fresh install correct without needing a backfill first.
   var TOTAL_HOURS_LOOKBACK_MONTHS = 60;
 
+  // DevOps Server hands back arrays nested inside a stored object as
+  // array-like objects ({"0": ..., "length": n}); turn them back into arrays.
+  function asArray(v) {
+    if (Array.isArray(v)) return v;
+    return v && typeof v.length === "number" ? Array.prototype.slice.call(v) : [];
+  }
+
   function getSettings(dataService) {
     return dataService.getValue(SETTINGS_KEY, { scopeType: "Default" }).then(function (cfg) {
       return cfg || {};
@@ -420,7 +427,7 @@
       if (!fieldRef) return;
 
       var idSet = {};
-      var known = (settings.knownMonthKeys || []).slice();
+      var known = asArray(settings.knownMonthKeys).slice();
       var knownSet = {};
       known.forEach(function (k) { knownSet[k] = true; });
       var registryChanged = false;
@@ -973,6 +980,7 @@
     deleteEntryById: deleteEntryById,
     SETTINGS_KEY: SETTINGS_KEY,
     getSettings: getSettings,
+    asArray: asArray,
     EPIC_BLOCKED_MSG: EPIC_BLOCKED_MSG,
     isLoggingBlocked: isLoggingBlocked,
     loggingBlockReason: loggingBlockReason,

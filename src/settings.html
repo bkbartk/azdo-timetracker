@@ -150,7 +150,7 @@
           <span id="addUserMsg" class="status"></span>
         </div>
         <div class="btn-row">
-          <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
+          <button id="saveBtn" onclick="saveConfig()" style="display:none" disabled>Save</button>
           <span id="statusMsg" class="status"></span>
         </div>
       </div>
@@ -370,9 +370,11 @@
         });
         return window.dataService.getValue(CONFIG_KEY, { scopeType: 'Default' }).then(
           function(cfg) {
+            configLoaded = true; // also when there's no config yet (first run)
             if (!cfg) return;
-            ((cfg.users) || []).forEach(function(u) {
-              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0, daySchedule: u.daySchedule || null };
+            window.TimeCore.asArray(cfg.users).forEach(function(u) {
+              var daySchedule = u.daySchedule ? window.TimeCore.asArray(u.daySchedule) : null;
+              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0, daySchedule: daySchedule };
               // Restore any user that was in a previous save (e.g. manually added, or outside the 3-month window)
               if (u.userId && !knownUsers[u.userId]) {
                 knownUsers[u.userId] = { userId: u.userId, userName: u.userName || '', userEmail: u.userEmail || '' };
@@ -394,17 +396,30 @@
             }
             updateUtcPreview();
             updateSubtitle(cfg.schedule);
-          },
-          function() {} // no config yet, first run
+          }
         );
       }).then(function() {
-        if (!rendered) { rendered = true; clearTimeout(safetyTimer); renderTable(); }
+        // Re-render even after the safety timer, now with the stored config (and Save)
+        rendered = true; clearTimeout(safetyTimer); renderTable();
       }, function(err) {
-        if (!rendered) {
-          rendered = true; clearTimeout(safetyTimer);
-          document.getElementById('loadingMsg').textContent = 'Error loading data: ' + (err.message || err);
-        }
+        rendered = true; clearTimeout(safetyTimer);
+        configLoaded = false;
+        updateSaveButton();
+        var msg = document.getElementById('loadingMsg');
+        msg.style.display = '';
+        msg.textContent = 'Error loading data: ' + (err.message || err) +
+          ' — Save is hidden so the stored settings are not overwritten. Reload the page to try again.';
       });
+    }
+
+    // Save writes the whole notification config, so it's only offered once the
+    // stored config has been read — otherwise it would overwrite it with defaults.
+    var configLoaded = false;
+
+    function updateSaveButton() {
+      var btn = document.getElementById('saveBtn');
+      btn.style.display = configLoaded ? '' : 'none';
+      btn.disabled = !configLoaded;
     }
 
     function updateSubtitle(schedule) {
@@ -472,7 +487,7 @@
       if (users.length === 0) {
         emptyState.style.display = 'block';
         tableContainer.style.display = 'none';
-        document.getElementById('saveBtn').disabled = false;
+        updateSaveButton();
         return;
       }
 
@@ -494,7 +509,7 @@
       });
 
       document.getElementById('tableContainer').style.display = 'block';
-      document.getElementById('saveBtn').disabled = false;
+      updateSaveButton();
     }
 
     // -------------------------------------------------------------------------
