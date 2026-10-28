@@ -213,6 +213,15 @@ async function fetchDocument(collectionName, debug) {
   return result;
 }
 
+/**
+ * DevOps Server's REST API returns arrays nested inside a document as
+ * array-like objects ({"0": …, "1": …, "length": n}); turn them back into arrays.
+ */
+function asArray(v) {
+  if (Array.isArray(v)) return v;
+  return v && typeof v.length === 'number' ? Array.from(v) : [];
+}
+
 // ---------------------------------------------------------------------------
 // Email
 // ---------------------------------------------------------------------------
@@ -517,6 +526,10 @@ async function main() {
 
   // Load notification config
   const config = await fetchDocument('notification-config', true);
+  if (config) {
+    config.users = asArray(config.users).map(u => Object.assign({}, u, { daySchedule: u.daySchedule ? asArray(u.daySchedule) : null }));
+    if (config.dailyReminder && config.dailyReminder.utcDays) config.dailyReminder.utcDays = asArray(config.dailyReminder.utcDays);
+  }
   console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
   console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
   console.log(`[DEBUG] config.managerDigest: ${JSON.stringify((config && config.managerDigest) || null)}`);
