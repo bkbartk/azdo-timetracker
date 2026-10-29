@@ -95,7 +95,8 @@ jobs:
              * When the manager digest is enabled it also sends one team overview (last
              * week per person + a 4-week trend) to the configured managers, on its own
              * day/time. And each weekday morning (when enabled) it reminds everyone whose
-             * previous working day came out short. All schedules live in Notification Settings.
+             * last few working days (lookbackDays, default 1) came out short. All
+             * schedules live in Notification Settings.
              *
              * Required environment variables:
              *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
@@ -200,6 +201,18 @@ jobs:
               while (d.getDay() === 0 || d.getDay() === 6) d = addDays(d, -1);
               d.setHours(0, 0, 0, 0);
               return d;
+            }
+
+            /**
+             * The last `count` working days (Mon–Fri) up to and including lastDay, oldest
+             * first — the days the daily reminder looks back over.
+             */
+            function getWorkingDaysBack(lastDay, count) {
+              const days = [];
+              for (let d = lastDay; days.length < count; d = addDays(d, -1)) {
+                if (d.getDay() !== 0 && d.getDay() !== 6) days.unshift(toDateStr(d));
+              }
+              return days;
             }
 
             /**
@@ -532,10 +545,18 @@ jobs:
             // Daily reminder
             // ---------------------------------------------------------------------------
 
-            function buildReminderHtml(user, dateStr, logged, expected) {
-              const what = logged > 0
-                ? `you logged <strong>${logged.toFixed(1)} of ${+expected.toFixed(1)} hours</strong>`
+            function buildReminderHtml(user, shortDays) {
+              const what = s => s.hours > 0
+                ? `you logged <strong>${s.hours.toFixed(1)} of ${+s.expected.toFixed(1)} hours</strong>`
                 : `you have <strong>no hours logged</strong>`;
+              const body = shortDays.length === 1
+                ? `On <strong>${formatDisplayDate(shortDays[0].date)}</strong> ${what(shortDays[0])} in Time Tracker.
+                    Please add the missing hours today.`
+                : `Some of your recent working days came out short in Time Tracker:
+                    <ul style="margin:8px 0;padding-left:20px">
+                      ${shortDays.map(s => `<li>On <strong>${formatDisplayDate(s.date)}</strong> ${what(s)}</li>`).join('\n          ')}
+                    </ul>
+                    Please add the missing hours today.`;
               const link = TIMETRACKER_URL
                 ? `<p style="margin:0 0 20px 0"><a href="${escHtml(TIMETRACKER_URL)}" style="color:#0078d4">Open Time Tracker</a></p>`
                 : '';
@@ -547,10 +568,9 @@ jobs:
               <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
                 <div style="padding:24px 28px">
                   <p style="margin:0 0 16px 0">Hi <strong>${escHtml(user.userName)}</strong>,</p>
-                  <p style="margin:0 0 20px 0">
-                    On <strong>${formatDisplayDate(dateStr)}</strong> ${what} in Time Tracker.
-                    Please add the missing hours today.
-                  </p>
+                  <div style="margin:0 0 20px 0">
+                    ${body}
+                  </div>
                   ${link}
                   <p style="margin:0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
                     This is an automated daily reminder from Time Tracker.
@@ -655,11 +675,11 @@ jobs:
               // Load time entries for the relevant month(s) — the digest reaches back TREND_WEEKS weeks
               const weeks     = getTrendWeeks(start);
               const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(now);
-              const dailyStr  = toDateStr(dailyDay);
+              const dailyDays = getWorkingDaysBack(dailyDay, Math.max(1, parseInt(dailyCfg.lookbackDays, 10) || 1));
               const ranges    = [];
               if (sendPersonal) ranges.push([start, end]);
               if (sendDigest)   ranges.push([weeks[0].monday, end]);
-              if (sendDaily)    ranges.push([dailyDay, dailyDay]);
+              if (sendDaily)    ranges.push([new Date(dailyDays[0] + 'T00:00:00'), dailyDay]);
               const monthKeys = getMonthKeysForRange(
                 new Date(Math.min(...ranges.map(r => r[0]))), new Date(Math.max(...ranges.map(r => r[1]))));
               let allEntries = [];
@@ -729,7 +749,7 @@ jobs:
                 const settings       = (await fetchDocument('timetracker_settings')) || {};
                 const editWindowDays = parseInt(settings.editWindowDays, 10);
                 const editCutoff     = isNaN(editWindowDays) || editWindowDays < 0 ? null : toDateStr(addDays(new Date(), -editWindowDays));
-                const rows           = buildDigestRows(enabledUsers, allEntries, weeks);
+                const rows          = buildDigestRows(enabledUsers, allEntries, weeks);
                 for (const r of rows) {
                   console.log(`Digest: ${r.user.userName} — ${r.totals.map(t => t.toFixed(1)).join(' / ')} h` +
                               (r.missing.length ? `  | no hours: ${r.missing.join(', ')}` : ''));
@@ -746,31 +766,39 @@ jobs:
               }
 
               if (sendDaily) {
-                const logged = {};
-                allEntries.filter(e => e.date === dailyStr).forEach(e => {
-                  logged[e.userId] = (logged[e.userId] || 0) + (Number(e.hours) || 0);
+                const logged = {}; // date -> userId -> hours
+                allEntries.filter(e => dailyDays.includes(e.date)).forEach(e => {
+                  const day = logged[e.date] = logged[e.date] || {};
+                  day[e.userId] = (day[e.userId] || 0) + (Number(e.hours) || 0);
                 });
-                // Nobody logging anything means a public holiday or company day off, not a team-wide lapse
-                if (!enabledUsers.some(u => logged[u.userId] > 0)) {
-                  console.log(`Daily reminder: nobody logged hours on ${dailyStr} — treating it as a day off, no reminders.`);
-                } else {
-                  for (const user of enabledUsers) {
-                    const hours = logged[user.userId] || 0;
-                    if (!isShortDay(user, dailyStr, hours)) continue;
-                    const expected = dailyExpectation(user, dailyStr);
-                    console.log(`Daily reminder: ${user.userName} logged ${hours.toFixed(1)} h on ${dailyStr}` +
-                                (expected !== null ? ` (expected ${+expected.toFixed(1)})` : ''));
-                    mails.push({
-                      total: hours,
-                      mailOptions: {
-                        from:    SMTP_FROM,
-                        to:      user.userEmail,
-                        subject: `Time Tracker: hours missing for ${formatDisplayDate(dailyStr)}`,
-                        html:    buildReminderHtml(user, dailyStr, hours, expected),
-                        priority: 'high',
-                      }
-                    });
+                const checkDays = dailyDays.filter(dateStr => {
+                  // Nobody logging anything means a public holiday or company day off, not a team-wide lapse
+                  if (!enabledUsers.some(u => (logged[dateStr] || {})[u.userId] > 0)) {
+                    console.log(`Daily reminder: nobody logged hours on ${dateStr} — treating it as a day off.`);
+                    return false;
                   }
+                  return true;
+                });
+                console.log(`Daily reminder: checking ${checkDays.join(', ') || 'no days'}.`);
+                for (const user of enabledUsers) {
+                  const shortDays = checkDays
+                    .map(dateStr => ({ date: dateStr, hours: (logged[dateStr] || {})[user.userId] || 0, expected: dailyExpectation(user, dateStr) }))
+                    .filter(s => isShortDay(user, s.date, s.hours));
+                  if (!shortDays.length) continue;
+                  console.log(`Daily reminder: ${user.userName} — ` + shortDays.map(s => `${s.date} ${s.hours.toFixed(1)} h` +
+                              (s.expected !== null ? ` (expected ${+s.expected.toFixed(1)})` : '')).join(', '));
+                  mails.push({
+                    total: shortDays.reduce((sum, s) => sum + s.hours, 0),
+                    mailOptions: {
+                      from:    SMTP_FROM,
+                      to:      user.userEmail,
+                      subject: shortDays.length === 1
+                        ? `Time Tracker: hours missing for ${formatDisplayDate(shortDays[0].date)}`
+                        : `Time Tracker: hours missing for ${shortDays.length} days`,
+                      html:    buildReminderHtml(user, shortDays),
+                      priority: 'high',
+                    }
+                  });
                 }
               }
 

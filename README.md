@@ -68,7 +68,9 @@ One email to the managers with the whole team on a single page: last week's hour
 Each weekday morning, emails everyone whose previous working day came out short (Monday checks Friday): "On Tue 27 October you logged 1.0 of 8 hours".
 
 - A day is short when it has fewer hours than the user's **Hours Mon–Fri** (e.g. `8 8 4 8 8` for a 36-hour week with a short Wednesday), else their weekly target ÷ 5, else when it has no hours at all
-- A day on which nobody logged anything (public holiday) sends no reminders
+- **Check the last (working days)** sets how far back it looks (default 1). With e.g. 5, one mail lists every short day of the past five working days, so a missed reminder or a day still left open keeps coming back until it's filled in
+- A day on which nobody logged anything (public holiday) is skipped
+- Days past the edit window are still listed — the user can't fix those themselves and should ask someone who can
 - Always sent with **high importance**
 - Sent by the same pipeline as the weekly summary; enable it and pick the time under **Daily Reminder** in Notification Settings
 
