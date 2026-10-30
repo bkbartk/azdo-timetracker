@@ -423,8 +423,9 @@
   // touchedEntries: entry snapshots (old and/or new state; nulls allowed)
   // whose ancestor chains define which work items need recomputing.
   // onStart: optional, called once it's clear there is work to do (a field
-  // is configured and there are work items to update). Resolves to the ids
-  // whose field write failed, or undefined when there was nothing to do.
+  // is configured and there are work items to update). Resolves to
+  // { id, message } for each work item whose field write failed, or
+  // undefined when there was nothing to do.
   function recalcTotalHours(dataService, witClient, touchedEntries, onStart) {
     if (!witClient) return Promise.resolve();
     return getSettings(dataService).then(function (settings) {
@@ -472,10 +473,10 @@
           return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
             .then(function () { return null; }, function (err) {
               console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
-              return id;
+              return { id: id, message: (err && err.message) || String(err) };
             });
         })).then(function (results) {
-          return results.filter(function (id) { return id !== null; }); // ids whose field write failed
+          return results.filter(function (r) { return r !== null; }); // failed field writes
         });
       });
     });
@@ -502,12 +503,12 @@
           showRecalcProblem("The total-hours update has not finished after 30 seconds.");
         }, RECALC_TIMEOUT_MS);
       });
-    }).then(function (failedIds) {
+    }).then(function (failures) {
       if (!started) return;
       finish();
-      if (failedIds && failedIds.length) {
+      if (failures && failures.length) {
         showRecalcProblem("The total-hours field could not be updated on " +
-          failedIds.map(function (id) { return "#" + id; }).join(", ") + ".");
+          failures.map(function (f) { return "#" + f.id + " (" + f.message + ")"; }).join(", ") + ".");
       } else if (!recalcsRunning && !document.querySelector(".tc-recalc-status.error")) {
         showRecalcStatus("done", "Total hours updated.");
         recalcDoneTimer = setTimeout(hideRecalcStatus, 3000);

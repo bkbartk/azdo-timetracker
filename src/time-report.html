@@ -284,11 +284,16 @@
             });
           });
           return TC.recalcTotalHours(window.dataService, witClient, touchedEntries);
-        }).then(function() {
+        }).then(function(totalFailures) {
           btn.disabled = false;
           progress.textContent = '';
           var msg = 'Re-synced ' + entryUpdates.length + ' of ' + filteredEntries.length + ' entries (' + (total - failed.length) + '/' + total + ' work items).';
           if (failed.length) msg += '\n\nCould not fetch work items (deleted or no access?): ' + failed.join(', ');
+          if (totalFailures && totalFailures.length) {
+            msg += '\n\nCould not update the total-hours field on:\n' + totalFailures.map(function(f) {
+              return '#' + f.id + ': ' + f.message;
+            }).join('\n');
+          }
           alert(msg);
           return loadAllEntries();
         });
