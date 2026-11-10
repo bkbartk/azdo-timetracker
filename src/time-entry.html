@@ -35,6 +35,7 @@
         <button id="logTimeBtn" onclick="openLogTime()" style="display: none;">+ Log Time</button>
       </div>
       <div id="epicBlockedNote" class="message info" style="display: none;"></div>
+      <div id="userChips" class="user-chips" style="display: none;"></div>
       <div id="entriesList"></div>
       <div id="totalHours" class="total-hours" style="display: none;"></div>
     </div>
@@ -89,6 +90,7 @@
     console.log("[TimeTracker] Script started");
     let workItemId = null;
     let currentUser = null;
+    let selectedUserId = null; // per-user filter on the entries list; null = everyone (defaults to you on load)
     const STORAGE_KEY_PREFIX = "timetracker_";
     const LEGACY_STORAGE_KEY = "timetracker_entries";
     var TC = window.TimeCore;
@@ -151,6 +153,8 @@
               return {
                 onLoaded: function(args) {
                   console.log("[TimeTracker] Work item loaded:", args.id);
+                  // Default to the logged-in user's entries, like Time Reports
+                  if (args.id !== workItemId) selectedUserId = currentUser && currentUser.id;
                   workItemId = args.id;
                   loadTimeEntries();
                   applyEpicBlock();
@@ -334,6 +338,13 @@
         var listEl = document.getElementById("entriesList");
         var totalEl = document.getElementById("totalHours");
 
+        renderUserChips(workItemEntries);
+        var selectedName = null;
+        if (selectedUserId) {
+          workItemEntries = workItemEntries.filter(function(e) { return e.userId === selectedUserId; });
+          if (workItemEntries.length) selectedName = workItemEntries[0].userName;
+        }
+
         if (workItemEntries.length === 0) {
           console.log("[TimeTracker] No entries to display");
           listEl.innerHTML = "<p class='text-muted'>No time entries yet.</p>";
@@ -366,9 +377,37 @@
           '</div>';
         }).join("");
 
-        totalEl.textContent = "Total: " + totalHours.toFixed(2) + " hours";
+        totalEl.textContent = "Total" + (selectedName ? " for " + selectedName : "") + ": " + totalHours.toFixed(2) + " hours";
         totalEl.style.display = "block";
       });
+    }
+
+    // One chip per user with their total hours on this work item; clicking a
+    // chip shows only that user's entries, "Everyone" shows all of them.
+    function renderUserChips(entries) {
+      var el = document.getElementById("userChips");
+      var users = {};
+      entries.forEach(function(e) {
+        if (!users[e.userId]) users[e.userId] = { id: e.userId, name: e.userName, hours: 0 };
+        users[e.userId].hours += e.hours;
+      });
+      var list = Object.values(users).sort(function(a, b) { return b.hours - a.hours; });
+      if (selectedUserId && !users[selectedUserId]) selectedUserId = null;
+      if (list.length < 2) { el.style.display = "none"; el.innerHTML = ""; return; }
+      var total = entries.reduce(function(sum, e) { return sum + e.hours; }, 0);
+      el.innerHTML = "";
+      [{ id: "", name: "Everyone", hours: total }].concat(list).forEach(function(u) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "user-chip" + ((selectedUserId || "") === u.id ? " active" : "");
+        b.innerHTML = escapeHtml(u.name) + ' <span class="user-chip-hours">' + (Math.round(u.hours * 100) / 100) + 'h</span>';
+        b.onclick = function() {
+          selectedUserId = u.id || null;
+          loadTimeEntries();
+        };
+        el.appendChild(b);
+      });
+      el.style.display = "";
     }
 
     function deleteEntry(entryId) {

@@ -39,6 +39,10 @@
       <label>Tag</label>
       <div class="ms" id="tagFilter" data-all="All Tags"></div>
     </div>
+    <div class="filter-group">
+      <label>Work Item</label>
+      <div class="ms" id="workItemFilter" data-all="All Work Items"></div>
+    </div>
     <div class="btn-group">
       <button class="icon-btn toolbar-btn" onclick="clearFilters()" title="Clear filters" aria-label="Clear filters">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon><line x1="16" y1="16" x2="22" y2="22"></line><line x1="22" y1="16" x2="16" y2="22"></line></svg>
@@ -88,6 +92,7 @@
     <div class="tab" data-view="byProject" onclick="switchView('byProject')">By Project</div>
     <div class="tab" data-view="byClient" onclick="switchView('byClient')">By Client</div>
     <div class="tab" data-view="byTag" onclick="switchView('byTag')">By Tag</div>
+    <div class="tab" data-view="byWorkItem" onclick="switchView('byWorkItem')">By Work Item</div>
     <div class="tab" data-view="monthlyReport" onclick="switchView('monthlyReport')">Monthly Report</div>
   </div>
 
@@ -340,7 +345,7 @@
       var params = {};
       if (raw.startdate) params.dateFrom = decodeURIComponent(raw.startdate);
       if (raw.enddate)   params.dateTo   = decodeURIComponent(raw.enddate);
-      ["user", "epic", "project", "client", "tag"].forEach(function(k) {
+      ["user", "epic", "project", "client", "tag", "workitem"].forEach(function(k) {
         if (raw[k]) params[k] = list(raw[k]);
       });
       return Object.keys(params).length ? params : null;
@@ -352,7 +357,7 @@
       var dateTo   = document.getElementById("dateTo").value;
       if (dateFrom) parts.push("startdate=" + encodeURIComponent(dateFrom));
       if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
-      [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"]].forEach(function(pair) {
+      [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"],["workItemFilter","workitem"]].forEach(function(pair) {
         var v = msGetValues(pair[0]);
         if (v === null) { if (pair[1] === "user") parts.push("user=*"); }
         else if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
@@ -468,7 +473,7 @@
         if (window.dataService) loadAllEntries();
       });
     });
-    ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+    ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter", "workItemFilter"].forEach(function(id) {
       msInit(id, applyFilters);
     });
 
@@ -478,7 +483,8 @@
     // otherwise it is the explicit set of ticked values (may be empty).
     function msInit(id, onChange) {
       var root = document.getElementById(id);
-      root.innerHTML = '<div class="ms-trigger" tabindex="0"></div><div class="ms-panel"></div>';
+      root.innerHTML = '<div class="ms-trigger" tabindex="0"></div>' +
+        '<div class="ms-panel"><input type="text" class="ms-search" placeholder="Search..."><div class="ms-list"></div></div>';
       root._ms = { options: [], selected: null, onChange: onChange };
       var trigger = root.querySelector(".ms-trigger");
       trigger.addEventListener("click", function() { msToggle(root); });
@@ -486,7 +492,12 @@
         if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); msToggle(root); }
         if (ev.key === "Escape") root.classList.remove("open");
       });
-      root.querySelector(".ms-panel").addEventListener("change", function(ev) {
+      var search = root.querySelector(".ms-search");
+      search.addEventListener("input", function() { msApplySearch(root); });
+      search.addEventListener("keydown", function(ev) {
+        if (ev.key === "Escape") { root.classList.remove("open"); trigger.focus(); }
+      });
+      root.querySelector(".ms-list").addEventListener("change", function(ev) {
         var cb = ev.target, st = root._ms;
         if (cb.dataset.all !== undefined) {
           st.selected = cb.checked ? null : {};
@@ -508,7 +519,21 @@
     function msToggle(root) {
       var wasOpen = root.classList.contains("open");
       document.querySelectorAll(".ms.open").forEach(function(el) { el.classList.remove("open"); });
-      if (!wasOpen) root.classList.add("open");
+      if (!wasOpen) {
+        root.classList.add("open");
+        var search = root.querySelector(".ms-search");
+        search.value = "";
+        msApplySearch(root);
+        search.focus();
+      }
+    }
+
+    // Hides options whose label doesn't contain the search text
+    function msApplySearch(root) {
+      var q = root.querySelector(".ms-search").value.trim().toLowerCase();
+      root.querySelectorAll(".ms-list .ms-option:not(.ms-all)").forEach(function(el) {
+        el.style.display = !q || el.textContent.toLowerCase().indexOf(q) !== -1 ? "" : "none";
+      });
     }
 
     document.addEventListener("click", function(ev) {
@@ -566,12 +591,13 @@
       trigger.title = values.length > 1
         ? st.options.filter(function(o) { return st.selected[o.value]; }).map(function(o) { return o.label; }).join(", ")
         : label;
-      root.querySelector(".ms-panel").innerHTML =
-        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (all ? ' checked' : '') + '> ' + escapeHtml(root.dataset.all) + '</label>' +
+      root.querySelector(".ms-list").innerHTML =
+        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (all ? ' checked' : '') + '><span class="ms-label">' + escapeHtml(root.dataset.all) + '</span></label>' +
         st.options.map(function(o) {
           return '<label class="ms-option"><input type="checkbox" value="' + escapeHtml(o.value).replace(/"/g, "&quot;") + '"' +
-            (all || st.selected[o.value] ? ' checked' : '') + '> ' + escapeHtml(o.label) + '</label>';
+            (all || st.selected[o.value] ? ' checked' : '') + '><span class="ms-label" title="' + escapeHtml(o.label).replace(/"/g, "&quot;") + '">' + escapeHtml(o.label) + '</span></label>';
         }).join("");
+      msApplySearch(root);
     }
 
     // Start initialization
@@ -719,6 +745,13 @@
         }
       });
       setGroup("tagFilter", [...allTags].sort().map(plain), "tag", allTags.size > 0);
+
+      // Unique work items
+      var workItems = {};
+      allEntries.forEach(function(e) { if (!workItems[e.workItemId]) workItems[e.workItemId] = e.workItemTitle; });
+      var wiOpts = Object.keys(workItems).map(function(id) { return { value: id, label: (workItems[id] || '(untitled)') + ' (#' + id + ')' }; })
+        .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
+      setGroup("workItemFilter", wiOpts, "workitem", wiOpts.length > 0);
     }
 
     function applyFilters() {
@@ -735,6 +768,7 @@
       var epics = set("epicFilter");
       var projects = set("projectFilter");
       var clients = set("clientFilter");
+      var workItemSet = set("workItemFilter");
       var tagValues = msGetValues("tagFilter");
       var tags = tagValues && tagValues.map(function(t) { return t.toLowerCase(); });
 
@@ -745,6 +779,7 @@
         if (epics && !epics[String(e.epicId)]) return false;
         if (projects && !projects[e.project || "(No Project)"]) return false;
         if (clients && !clients[e.client || "(No Client)"]) return false;
+        if (workItemSet && !workItemSet[String(e.workItemId)]) return false;
         if (tags) {
           var entryTags = (e.tags || "").split(";").map(function(t) { return t.trim().toLowerCase(); });
           if (!tags.some(function(t) { return entryTags.indexOf(t) !== -1; })) return false;
@@ -759,7 +794,7 @@
 
     function clearFilters() {
       setDefaultDateRange();
-      ["epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+      ["epicFilter", "projectFilter", "clientFilter", "tagFilter", "workItemFilter"].forEach(function(id) {
         document.getElementById(id)._ms.selected = null;
       });
       pendingFilters = { user: defaultUserSelection() };
@@ -815,6 +850,9 @@
           break;
         case "byTag":
           renderByTagView();
+          break;
+        case "byWorkItem":
+          renderByWorkItemView();
           break;
         case "monthlyReport":
           renderMonthlyReportView();
@@ -1015,6 +1053,45 @@
       }).join("");
     }
 
+    function groupByWorkItem() {
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        if (!grouped[e.workItemId]) {
+          grouped[e.workItemId] = { entry: e, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[e.workItemId].hours += e.hours;
+        grouped[e.workItemId].entries++;
+        grouped[e.workItemId].users.add(e.userId);
+      });
+      return Object.values(grouped).sort((a, b) => b.hours - a.hours);
+    }
+
+    function renderByWorkItemView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Work Item</th><th>Parent</th><th>Epic</th><th>Total Hours</th><th>Entries</th><th>Users</th></tr>";
+
+      tbody.innerHTML = groupByWorkItem().map(function(r) {
+        var e = r.entry;
+        var wiUrl = getWorkItemUrl(e);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer">#' + e.workItemId + '</a>'
+          : '#' + e.workItemId;
+        var parentDisplay = e.parentTitle && e.parentType
+          ? escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>"
+          : "-";
+        return "<tr>" +
+          "<td><strong>" + escapeHtml(e.workItemTitle || "(untitled)") + "</strong> (" + wiIdLabel + ")</td>" +
+          "<td>" + parentDisplay + "</td>" +
+          "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.users.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
     function renderMonthlyReportView() {
       var thead = document.getElementById("tableHead");
       var tbody = document.getElementById("tableBody");
@@ -1126,6 +1203,10 @@
           csv = exportByTagCSV();
           filename = "time-by-tag-" + dateFrom + "-to-" + dateTo + ".csv";
           break;
+        case "byWorkItem":
+          csv = exportByWorkItemCSV();
+          filename = "time-by-work-item-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
         case "monthlyReport":
           csv = exportMonthlyReportCSV();
           filename = "monthly-report-" + dateFrom + "-to-" + dateTo + ".csv";
@@ -1143,8 +1224,9 @@
     }
 
     function exportEntriesCSV() {
-      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Parent ID", "Parent Title", "Parent Type", "Epic", "Project", "Client", "Tags", "Hours", "Description"];
+      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Parent ID", "Parent Title", "Parent Type", "Epic", "Project", "Client", "Tags", "Hours", "Description", "Created At", "Last Modified", "Modified At (all)", "Times Modified"];
       var rows = filteredEntries.map(function(e) {
+        var mods = e.modifiedAt || [];
         return [
           e.date,
           e.userName,
@@ -1159,7 +1241,11 @@
           '"' + (e.client || "").replace(/"/g, '""') + '"',
           '"' + (e.tags || "").replace(/"/g, '""') + '"',
           e.hours,
-          '"' + (e.description || "").replace(/"/g, '""') + '"'
+          '"' + (e.description || "").replace(/"/g, '""') + '"',
+          TC.entryCreatedAt(e),
+          mods.length ? mods[mods.length - 1] : "",
+          '"' + mods.join("; ") + '"',
+          mods.length
         ].join(",");
       });
       return headers.join(",") + "\n" + rows.join("\n");
@@ -1287,6 +1373,16 @@
           r.entries,
           r.users.size
         ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByWorkItemCSV() {
+      function q(v) { return '"' + String(v || "").replace(/"/g, '""') + '"'; }
+      var headers = ["Work Item ID", "Work Item Title", "Parent Title", "Epic", "Total Hours", "Entries", "Users"];
+      var rows = groupByWorkItem().map(function(r) {
+        var e = r.entry;
+        return [e.workItemId, q(e.workItemTitle), q(e.parentTitle), q(e.epicTitle), r.hours.toFixed(1), r.entries, r.users.size].join(",");
       });
       return headers.join(",") + "\n" + rows.join("\n");
     }

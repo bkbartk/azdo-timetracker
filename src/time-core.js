@@ -571,6 +571,32 @@
     });
   }
 
+  // Edit history: entries get a modifiedAt array of ISO timestamps, one
+  // per edit that actually changed hours, date or description. Entries
+  // from before this existed simply have no modifiedAt (never edited, or
+  // edited before it was tracked).
+  function withModification(oldEntry, updates) {
+    var changed = Object.keys(updates).some(function (k) { return updates[k] !== oldEntry[k]; });
+    if (!changed) return updates;
+    return Object.assign({}, updates, {
+      modifiedAt: (oldEntry.modifiedAt || []).concat([new Date().toISOString()])
+    });
+  }
+
+  // When the entry was created. Entries from before createdAt existed
+  // fall back to their id, which is the Date.now() of their creation.
+  function entryCreatedAt(entry) {
+    if (entry.createdAt) return entry.createdAt;
+    var ms = Number(entry.id);
+    return ms > 1e12 ? new Date(ms).toISOString() : "";
+  }
+
+  function getEntry(dataService, entryId, entryDate) {
+    return dataService.getValue(getStorageKeyForDate(entryDate), { scopeType: "Default" }).then(function (data) {
+      return (data || []).find(function (e) { return e.id === entryId; }) || null;
+    });
+  }
+
   function updateEntry(dataService, entryId, originalDate, updates, witClient) {
     return checkEditWindow(dataService, [originalDate, updates.date]).then(function () {
       return applyEntryUpdate(dataService, entryId, originalDate, updates, witClient);
@@ -585,7 +611,7 @@
         var oldEntry = (data || []).find(function(e) { return e.id === entryId; });
         if (!oldEntry) throw new Error("Entry not found");
         return maybeRefreshAncestry(dataService, witClient, oldEntry).then(function (refreshed) {
-          var newEntry = Object.assign({}, refreshed, updates);
+          var newEntry = Object.assign({}, refreshed, withModification(oldEntry, updates));
           var updated = data.map(function(e) {
             return e.id === entryId ? newEntry : e;
           });
@@ -605,7 +631,7 @@
       var entryToMove = oldEntries.find(function(e) { return e.id === entryId; });
       if (!entryToMove) throw new Error("Entry not found in original month");
       return maybeRefreshAncestry(dataService, witClient, entryToMove).then(function (refreshed) {
-        var updatedEntry = Object.assign({}, refreshed, updates);
+        var updatedEntry = Object.assign({}, refreshed, withModification(entryToMove, updates));
         return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
           return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" }).then(function (result) {
             recalcInBackground(dataService, witClient, [entryToMove, updatedEntry]);
@@ -988,8 +1014,18 @@
         });
       } else if (config.entryId) {
         p = getClient().then(function(c) {
-          return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
-            { hours: hours, date: date, description: desc }).then(function(newEntry) {
+          return Promise.all([
+            buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
+              { hours: hours, date: date, description: desc }),
+            getEntry(config.dataService, config.entryId, config.originalDate)
+          ]).then(function(res) {
+            var newEntry = res[0], oldEntry = res[1];
+            // Moved to another work item: still the same entry, so keep
+            // its creation date and edit history and log this edit.
+            if (oldEntry) {
+              newEntry.createdAt = entryCreatedAt(oldEntry) || newEntry.createdAt;
+              newEntry.modifiedAt = (oldEntry.modifiedAt || []).concat([new Date().toISOString()]);
+            }
             return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
               .then(function() { return saveEntry(config.dataService, newEntry, c); });
           });
@@ -1075,6 +1111,7 @@
     DELETE_ICON: DELETE_ICON,
     escapeHtml: escapeHtml,
     updateEntry: updateEntry,
+    entryCreatedAt: entryCreatedAt,
     resolveAncestry: resolveAncestry,
     buildEntryForWorkItem: buildEntryForWorkItem,
     openAddEntryModal: openAddEntryModal
