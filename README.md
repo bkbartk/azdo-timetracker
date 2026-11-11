@@ -188,7 +188,7 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 | Variable | Example | Secret |
 |----------|---------|--------|
 | `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
-| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope)_ | ✓ |
+| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope, plus Work Items (Read) for the deleted-work-item check)_ | ✓ |
 | `SMTP_HOST` | `mail-relay.company.com` | |
 | `SMTP_FROM` | `timetracker@company.com` | |
 | `SMTP_PORT` | `25` _(optional, default 25)_ | |
@@ -201,6 +201,7 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 > 1. Go to **User settings → Personal Access Tokens → New Token**
 > 2. Click **Show all scopes**, then find **Extensions** and tick **Extension Data → Read**
 >    — "Extension Data" is the storage service; "Extensions" (without Data) is for marketplace management and is not needed
+>    — also tick **Work Items → Read**: the manager digest uses it to find hours logged on deleted work items and who deleted them. Without it the digest only knows about deletions a Time Reports resync already found
 > 3. If you cannot find it, select **Full access** as a fallback
 > 4. Make sure the selected organization/collection matches your `AZDO_SERVER_URL`
 > 5. Copy the generated token into the `AZDO_PAT` pipeline variable and mark it as **Secret**

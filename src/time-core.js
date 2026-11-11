@@ -426,7 +426,8 @@
   // is configured and there are work items to update). Resolves to
   // { id, message } for each work item whose field write failed, or
   // undefined when there was nothing to do.
-  function recalcTotalHours(dataService, witClient, touchedEntries, onStart) {
+  // opts.bypassRules: retry failed writes ignoring work item rules.
+  function recalcTotalHours(dataService, witClient, touchedEntries, onStart, opts) {
     if (!witClient) return Promise.resolve();
     return getSettings(dataService).then(function (settings) {
       var fieldRef = settings.totalHoursField;
@@ -470,10 +471,25 @@
           allEntries.forEach(function (e) {
             if (chainIdsFor(e).indexOf(id) !== -1) total += (e.hours || 0);
           });
-          return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
+          var patch = [{ op: "add", path: "/fields/" + fieldRef, value: total }];
+          function errMsg(err) { return (err && err.message) || String(err); }
+          return witClient.updateWorkItem(patch, id)
             .then(function () { return null; }, function (err) {
+              // A work item with an empty required field (e.g. Acceptance
+              // Criteria) rejects every update, ours included. With
+              // opts.bypassRules (the resync button) retry once ignoring
+              // the work item rules; that needs the "Bypass rules on work
+              // item updates" permission. Legacy client signature:
+              // (document, id, validateOnly, bypassRules, suppressNotifications).
+              if (!(opts && opts.bypassRules)) throw err;
+              return witClient.updateWorkItem(patch, id, false, true, true)
+                .then(function () { return null; }, function (err2) {
+                  throw new Error(errMsg(err) + " (retry bypassing rules also failed: " + errMsg(err2) + ")");
+                });
+            })
+            .catch(function (err) {
               console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
-              return { id: id, message: (err && err.message) || String(err) };
+              return { id: id, message: errMsg(err) };
             });
         })).then(function (results) {
           return results.filter(function (r) { return r !== null; }); // failed field writes

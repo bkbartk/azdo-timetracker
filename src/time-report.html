@@ -186,7 +186,10 @@
           parentTitle: null,
           parentType: null,
           epicId: null,
-          epicTitle: null
+          epicTitle: null,
+          // fetched fine, so not (or no longer) deleted
+          workItemDeletedBy: null,
+          workItemDeletedDate: null
         };
         return TC.resolveAncestry(witClient, wi).then(function(anc) {
           meta.parentTitle = anc.parentTitle;
@@ -202,6 +205,42 @@
           return Object.assign(meta, TC.resolveProjectClient(wi, anc, fieldRefs));
         });
       });
+    }
+
+    // A work item resync can't fetch is usually deleted. Deleted items sit
+    // in the project's recycle bin, which records who deleted them and when.
+    // Resolves to { by, date, fields } or null when it isn't there
+    // (destroyed, another project, or no access to the recycle bin).
+    // The recycle bin keeps the item's fields (title, tags) but not its
+    // links, so parent/epic can't be re-resolved from it.
+    function lookupDeleted(witClient, wiId, project) {
+      return Promise.resolve()
+        .then(function() { return witClient.getDeletedWorkItem(parseInt(wiId, 10), project || currentProjectName); })
+        .then(function(d) {
+          if (!d) return null;
+          return {
+            by: String(d.deletedBy || 'unknown').replace(/\s*<[^>]*>\s*$/, ''),
+            date: d.deletedDate ? String(d.deletedDate).slice(0, 10) : '?',
+            fields: (d.resource && d.resource.fields) || {}
+          };
+        }, function() { return null; });
+    }
+
+    function failedLine(wiId, entries, del) {
+      var hours = entries.reduce(function(s, e) { return s + (e.hours || 0); }, 0);
+      var title = (del && del.fields['System.Title']) || (entries[0] && entries[0].workItemTitle) || '(unknown title)';
+      return '#' + wiId + ' ' + title + ' (' + hours + 'h on ' + entries.length + ' entries)\n   ' + (del
+        ? 'deleted by ' + del.by + ' on ' + del.date + ': restore it from the recycle bin, or move the hours'
+        : 'not in the recycle bin: permanently deleted, in another project, or no access');
+    }
+
+    // Red badge after the work item id for entries whose work item a resync
+    // found in the recycle bin.
+    function deletedBadge(e) {
+      if (!e.workItemDeletedBy) return '';
+      var who = 'Deleted by ' + e.workItemDeletedBy + ' on ' + (e.workItemDeletedDate || '?');
+      return ' <span class="deleted-badge" title="' + escapeHtml(who + '. Restore it from the recycle bin, or move the hours.') + '">' +
+        escapeHtml(who) + '</span>';
     }
 
     function batchUpdateEntries(entryUpdates) {
@@ -264,7 +303,23 @@
               });
             }).catch(function(err) {
               console.warn('[TimeReport] Re-sync failed for work item ' + wiId, err);
-              failed.push(wiId);
+              return lookupDeleted(witClient, wiId, (byWorkItem[wiId][0] || {}).teamProject).then(function(del) {
+                failed.push(failedLine(wiId, byWorkItem[wiId], del));
+                if (!del) return;
+                // Deleted: refresh title/tags from the recycle bin. Keep the
+                // cached parent/epic/project/client (links are gone) and
+                // merge tags so ones inherited from ancestors stay. Not
+                // added to metaByWorkItem: a deleted item's total-hours
+                // field can't be written.
+                byWorkItem[wiId].forEach(function(e) {
+                  entryUpdates.push({ id: e.id, date: e.date, updates: {
+                    workItemTitle: del.fields['System.Title'] || e.workItemTitle,
+                    tags: TC.mergeTags(del.fields['System.Tags'] || '', e.tags || ''),
+                    workItemDeletedBy: del.by,
+                    workItemDeletedDate: del.date
+                  } });
+                });
+              });
             }).then(function() {
               done++;
               progress.textContent = done + '/' + total;
@@ -288,12 +343,12 @@
               touchedEntries.push(Object.assign({}, e, meta));
             });
           });
-          return TC.recalcTotalHours(window.dataService, witClient, touchedEntries);
+          return TC.recalcTotalHours(window.dataService, witClient, touchedEntries, null, { bypassRules: true });
         }).then(function(totalFailures) {
           btn.disabled = false;
           progress.textContent = '';
           var msg = 'Re-synced ' + entryUpdates.length + ' of ' + filteredEntries.length + ' entries (' + (total - failed.length) + '/' + total + ' work items).';
-          if (failed.length) msg += '\n\nCould not fetch work items (deleted or no access?): ' + failed.join(', ');
+          if (failed.length) msg += '\n\nWork items no longer in Azure DevOps:\n' + failed.join('\n');
           if (totalFailures && totalFailures.length) {
             msg += '\n\nCould not update the total-hours field on:\n' + totalFailures.map(function(f) {
               return '#' + f.id + ': ' + f.message;
@@ -893,7 +948,7 @@
         return "<tr>" +
           "<td>" + e.date + "</td>" +
           "<td>" + escapeHtml(e.userName) + "</td>" +
-          "<td>" + escapeHtml(e.workItemTitle) + " (" + wiIdLabel + ")</td>" +
+          "<td>" + escapeHtml(e.workItemTitle) + " (" + wiIdLabel + ")" + deletedBadge(e) + "</td>" +
           "<td>" + parentDisplay + "</td>" +
           "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
           "<td>" + tags + "</td>" +
@@ -1082,7 +1137,7 @@
           ? escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>"
           : "-";
         return "<tr>" +
-          "<td><strong>" + escapeHtml(e.workItemTitle || "(untitled)") + "</strong> (" + wiIdLabel + ")</td>" +
+          "<td><strong>" + escapeHtml(e.workItemTitle || "(untitled)") + "</strong> (" + wiIdLabel + ")" + deletedBadge(e) + "</td>" +
           "<td>" + parentDisplay + "</td>" +
           "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
           "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +

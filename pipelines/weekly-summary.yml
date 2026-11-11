@@ -9,7 +9,7 @@
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
 #   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
-#   AZDO_PAT           Personal Access Token — vso.extension.data scope  [SECRET]
+#   AZDO_PAT           Personal Access Token — vso.extension.data + Work Items (Read)  [SECRET]
 #   AZDO_PUBLISHER     miguelnicolas                    (default, change if forked)
 #   AZDO_EXTENSION_ID  timetracker-extension            (default, use -dev for dev)
 #   SMTP_HOST          mail-relay.yourcompany.com

@@ -14,7 +14,7 @@
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
 #   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
-#   AZDO_PAT           Personal Access Token — vso.extension.data scope  [SECRET]
+#   AZDO_PAT           Personal Access Token — vso.extension.data + Work Items (Read)  [SECRET]
 #   AZDO_PUBLISHER     miguelnicolas                    (default, change if forked)
 #   AZDO_EXTENSION_ID  timetracker-extension            (default, use -dev for dev)
 #   SMTP_HOST          mail-relay.yourcompany.com
@@ -102,7 +102,8 @@ jobs:
              *
              * Required environment variables:
              *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
-             *   AZDO_PAT          Personal Access Token (needs vso.extension.data scope)
+             *   AZDO_PAT          Personal Access Token (needs vso.extension.data scope;
+             *                     Work Items (Read) too for the digest's deleted-work-item check)
              *   SMTP_HOST         SMTP relay hostname
              *   SMTP_FROM         From address, e.g. timetracker@company.com
              *
@@ -255,7 +256,7 @@ jobs:
             }
 
             // ---------------------------------------------------------------------------
-            // Azure DevOps Extension Data REST API
+            // Azure DevOps REST API
             // ---------------------------------------------------------------------------
 
             function authHeader() {
@@ -328,6 +329,126 @@ jobs:
             function asArray(v) {
               if (Array.isArray(v)) return v;
               return v && typeof v.length === 'number' ? Array.from(v) : [];
+            }
+
+            // ---------------------------------------------------------------------------
+            // Hours on deleted work items
+            // ---------------------------------------------------------------------------
+
+            /**
+             * Work items with hours logged on them that no longer exist. Each deleted one
+             * is looked up in its project's recycle bin for who deleted it and when.
+             * Needs Work Items (Read) on the PAT; without it, falls back to the entries
+             * the Time Reports resync flagged (workItemDeletedBy / workItemDeletedDate).
+             * Returns [{ id, title, project, hours, entries, loggedBy, deletedBy, deletedDate }].
+             */
+            async function findDeletedWorkItems(entries) {
+              const byId = new Map();
+              for (const e of entries) {
+                if (!e.workItemId) continue;
+                const k = String(e.workItemId);
+                if (!byId.has(k)) byId.set(k, []);
+                byId.get(k).push(e);
+              }
+              const ids  = [...byId.keys()];
+              const gone = new Map(); // id -> { deletedBy, deletedDate } (nulls when not in the recycle bin)
+
+              try {
+                for (let i = 0; i < ids.length; i += 200) {
+                  const chunk = ids.slice(i, i + 200);
+                  // errorPolicy=omit: a missing work item comes back as null instead of failing the batch
+                  const res   = await fetchJson(`${AZDO_SERVER_URL}/_apis/wit/workitems?ids=${chunk.join(',')}` +
+                                                `&fields=System.Id&errorPolicy=omit&api-version=5.0`);
+                  const found = new Set(((res && res.value) || []).filter(Boolean).map(w => String(w.id)));
+                  for (const id of chunk) if (!found.has(id)) gone.set(id, { deletedBy: null, deletedDate: null });
+                }
+                for (const id of gone.keys()) {
+                  const project = byId.get(id).map(e => e.teamProject).find(Boolean);
+                  if (!project) continue;
+                  const d = await fetchJson(`${AZDO_SERVER_URL}/${encodeURIComponent(project)}/_apis/wit/recyclebin/${id}?api-version=5.0`)
+                    .catch(err => { console.warn(`Recycle bin lookup failed for #${id}: ${err.message}`); return null; });
+                  if (d) gone.set(id, {
+                    deletedBy:   String(d.deletedBy || '').replace(/\s*<[^>]*>\s*$/, '') || null, // "Name <DOMAIN\user>" -> "Name"
+                    deletedDate: d.deletedDate ? String(d.deletedDate).slice(0, 10) : null,
+                  });
+                }
+              } catch (err) {
+                console.warn(`Deleted work item check: could not query work items (PAT needs Work Items (Read)?): ${err.message}. ` +
+                             `Falling back to items flagged by a Time Reports resync.`);
+                gone.clear();
+                for (const [id, list] of byId) {
+                  const flagged = list.find(e => e.workItemDeletedBy);
+                  if (flagged) gone.set(id, { deletedBy: flagged.workItemDeletedBy, deletedDate: flagged.workItemDeletedDate || null });
+                }
+              }
+
+              return [...gone].map(([id, del]) => {
+                const list = byId.get(id);
+                return {
+                  id,
+                  title:    list.map(e => e.workItemTitle).find(Boolean) || '(unknown title)',
+                  project:  list.map(e => e.teamProject).find(Boolean) || '',
+                  hours:    list.reduce((s, e) => s + (Number(e.hours) || 0), 0),
+                  entries:  list.length,
+                  loggedBy: [...new Set(list.map(e => e.userName).filter(Boolean))].sort(),
+                  ...del,
+                };
+              }).sort((a, b) => b.hours - a.hours);
+            }
+
+            function deletedWorkItemsTable(items) {
+              const th = 'padding:8px 10px;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9;text-align:left';
+              const td = 'padding:7px 10px;border-bottom:1px solid #edebe9;vertical-align:top';
+              return `
+                  <table style="width:100%;border-collapse:collapse;border:1px solid #edebe9">
+                    <thead>
+                      <tr style="background:#f3f2f1">
+                        <th style="${th}">Work item</th>
+                        <th style="${th};text-align:right">Hours</th>
+                        <th style="${th}">Logged by</th>
+                        <th style="${th}">Deleted by</th>
+                      </tr>
+                    </thead>
+                    <tbody>${items.map(it => `
+                      <tr>
+                        <td style="${td}">#${escHtml(it.id)} ${escHtml(it.title)}</td>
+                        <td style="${td};text-align:right;font-weight:600">${it.hours.toFixed(1)}</td>
+                        <td style="${td}">${escHtml(it.loggedBy.join(', '))}</td>
+                        <td style="${td}">${it.deletedBy
+                          ? `${escHtml(it.deletedBy)}<br><span style="font-size:11px;color:#605e5c">${escHtml(it.deletedDate || '')}</span>`
+                          : '<span style="color:#a19f9d">not in the recycle bin (permanently deleted)</span>'}</td>
+                      </tr>`).join('')}
+                    </tbody>
+                  </table>`;
+            }
+
+            /** Sent to whoever deleted work items that still have hours on them. */
+            function buildDeleterHtml(name, items) {
+              const firstName = String(name || '').trim().split(/\s+/)[0] || 'there';
+              const one = items.length === 1;
+              return `<!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+              <div style="max-width:640px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+                <div style="padding:24px 28px">
+                  <p style="margin:0 0 16px 0">Hello ${escHtml(firstName)},</p>
+                  <p style="margin:0 0 16px 0">
+                    You deleted ${one ? 'a work item that has' : 'work items that have'} hours logged on ${one ? 'it' : 'them'} in Time Tracker.
+                    Those hours no longer roll up to a parent or epic, so they drop out of the reports.
+                  </p>
+                  ${deletedWorkItemsTable(items)}
+                  <p style="margin:16px 0 20px 0">
+                    Please <strong>restore ${one ? 'it' : 'them'}</strong> from the recycle bin (Boards &rarr; Work items &rarr; Recycle bin)
+                    if the deletion was a mistake, or ask the people who logged the hours to move them to another work item.
+                  </p>
+                  <p style="margin:0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+                    This is an automated message from Time Tracker.
+                  </p>
+                </div>
+              </div>
+            </body>
+            </html>`;
             }
 
             // ---------------------------------------------------------------------------
@@ -467,7 +588,7 @@ jobs:
               return rows;
             }
 
-            function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
+            function buildDigestHtml(rows, weeks, editCutoff, editWindowDays, deleted = []) {
               const th = 'padding:9px 10px;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9';
               const td = 'padding:8px 10px;border-bottom:1px solid #edebe9';
               const lastIdx = weeks.length - 1;
@@ -538,7 +659,14 @@ jobs:
                     </thead>
                     <tbody>${body}</tbody>
                   </table>
-
+            ${deleted.length ? `
+                  <h3 style="margin:28px 0 6px 0;font-size:15px;color:#d13438">Hours on deleted work items</h3>
+                  <p style="margin:0 0 12px 0;font-size:13px;color:#605e5c">
+                    These work items were deleted while hours are still logged on them. Restore them from the recycle bin,
+                    or have the hours moved to another work item.
+                  </p>
+                  ${deletedWorkItemsTable(deleted)}
+            ` : ''}
                   <p style="margin:24px 0 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
                     Week totals are recalculated from the current data on every send, so an earlier week that
                     has gone up since the last digest means gaps were filled in afterwards.${lockNote}
@@ -821,6 +949,21 @@ jobs:
                 const editWindowDays = parseInt(settings.editWindowDays, 10);
                 const editCutoff     = isNaN(editWindowDays) || editWindowDays < 0 ? null : toDateStr(addDays(new Date(), -editWindowDays));
                 const rows          = buildDigestRows(enabledUsers, allEntries, weeks);
+
+                // Hours on deleted work items, over every month that has entries (the
+                // settings' month registry), not just the digest's weeks.
+                const scanKeys = new Set([...asArray(settings.knownMonthKeys), ...monthKeys]);
+                let scanEntries = allEntries.slice();
+                for (const key of scanKeys) {
+                  if (monthKeys.includes(key)) continue;
+                  const entries = await fetchDocument(key);
+                  if (Array.isArray(entries)) scanEntries = scanEntries.concat(entries);
+                }
+                const deleted = await findDeletedWorkItems(scanEntries);
+                for (const d of deleted) {
+                  console.log(`Deleted work item: #${d.id} ${d.title} — ${d.hours.toFixed(1)} h, ` +
+                              (d.deletedBy ? `deleted by ${d.deletedBy} on ${d.deletedDate}` : 'not in the recycle bin'));
+                }
                 // The digest table shows only the newest DIGEST_MAX_WEEKS; the follow-up below uses all weeks
                 const shown         = Math.min(weeks.length, DIGEST_MAX_WEEKS);
                 const digestRows    = rows.map(r => ({ ...r, totals: r.totals.slice(-shown) }));
@@ -834,9 +977,36 @@ jobs:
                     from:    SMTP_FROM,
                     to:      digestRecipients.join(', '),
                     subject: `Team Hours Digest: ${startStr} – ${endStr}`,
-                    html:    buildDigestHtml(digestRows, weeks.slice(-shown), editCutoff, editWindowDays),
+                    html:    buildDigestHtml(digestRows, weeks.slice(-shown), editCutoff, editWindowDays, deleted),
                   }
                 });
+
+                // Tell whoever deleted them, once: only deletions since the previous digest
+                // (the last 7 days). Matched to a Notification Settings user by display name.
+                const since     = toDateStr(addDays(new Date(), -7));
+                const byDeleter = new Map();
+                for (const d of deleted) {
+                  if (!d.deletedBy || !d.deletedDate || d.deletedDate < since) continue;
+                  if (!byDeleter.has(d.deletedBy)) byDeleter.set(d.deletedBy, []);
+                  byDeleter.get(d.deletedBy).push(d);
+                }
+                for (const [name, items] of byDeleter) {
+                  const user = ((config && config.users) || []).find(u =>
+                    u.userEmail && String(u.userName || '').trim().toLowerCase() === name.trim().toLowerCase());
+                  if (!user) { console.log(`Deleted work items: no email known for ${name}, not notified.`); continue; }
+                  console.log(`Deleted work items: notifying ${name} about ${items.map(d => '#' + d.id).join(', ')}`);
+                  mails.push({
+                    total: items.reduce((s, d) => s + d.hours, 0),
+                    mailOptions: {
+                      from:    SMTP_FROM,
+                      to:      user.userEmail,
+                      subject: items.length === 1
+                        ? `Time Tracker: work item #${items[0].id} you deleted has ${items[0].hours.toFixed(1)} hours logged`
+                        : `Time Tracker: ${items.length} work items you deleted have hours logged`,
+                      html:    buildDeleterHtml(name, items),
+                    }
+                  });
+                }
 
                 // Firm follow-up to everyone with a short week within the daily reminder's look-back
                 // (not the edit window: a week that can't be fixed anymore was still done wrong).
