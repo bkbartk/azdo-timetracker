@@ -40,6 +40,8 @@ const { WebClient } = require('@slack/web-api');
 // comes from System.CollectionUri and the pipeline's own identity ($(System.AccessToken),
 // mapped to SYSTEM_ACCESSTOKEN) is used unless a PAT is given.
 const unset = v => (v || '').replace(/^\$\(.*\)$/, '').trim();
+// Pipelines pass boolean parameters as "True"/"False", so compare without case
+const isTrue = v => String(v || '').trim().toLowerCase() === 'true';
 const AZDO_SERVER_URL   = (unset(process.env.AZDO_SERVER_URL) || unset(process.env.SYSTEM_COLLECTIONURI)).replace(/\/$/, '');
 const AZDO_PAT          = unset(process.env.AZDO_PAT);
 const AZDO_TOKEN        = unset(process.env.SYSTEM_ACCESSTOKEN);
@@ -48,7 +50,7 @@ const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.
 const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
 const SLACK_BOT_TOKEN   = process.env.SLACK_BOT_TOKEN || '';
 const TIMETRACKER_URL   = (process.env.TIMETRACKER_URL || '').trim();
-const DRY_RUN           = process.env.DRY_RUN === 'true';
+const DRY_RUN           = isTrue(process.env.DRY_RUN);
 
 const OVERRIDE_TARGET_DATE = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_TARGET_DATE || '').trim())
   ? process.env.OVERRIDE_TARGET_DATE.trim()

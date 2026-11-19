@@ -145,6 +145,8 @@ jobs:
             // comes from System.CollectionUri and the pipeline's own identity ($(System.AccessToken),
             // mapped to SYSTEM_ACCESSTOKEN) is used unless a PAT is given.
             const unset = v => (v || '').replace(/^\$\(.*\)$/, '').trim();
+            // Pipelines pass boolean parameters as "True"/"False", so compare without case
+            const isTrue = v => String(v || '').trim().toLowerCase() === 'true';
             const AZDO_SERVER_URL  = (unset(process.env.AZDO_SERVER_URL) || unset(process.env.SYSTEM_COLLECTIONURI)).replace(/\/$/, '');
             const AZDO_PAT         = unset(process.env.AZDO_PAT);
             const AZDO_TOKEN       = unset(process.env.SYSTEM_ACCESSTOKEN);
@@ -154,18 +156,18 @@ jobs:
             const SMTP_HOST        = process.env.SMTP_HOST         || '';
             const SMTP_PORT        = parseInt(process.env.SMTP_PORT || '25', 10);
             const SMTP_FROM        = process.env.SMTP_FROM         || '';
-            const SMTP_SECURE      = process.env.SMTP_SECURE === 'true';
-            const SMTP_IGNORE_TLS  = process.env.SMTP_IGNORE_TLS === 'true';
+            const SMTP_SECURE      = isTrue(process.env.SMTP_SECURE);
+            const SMTP_IGNORE_TLS  = isTrue(process.env.SMTP_IGNORE_TLS);
             const SMTP_USER        = process.env.SMTP_USER         || null;
             const SMTP_PASS        = process.env.SMTP_PASS         || null;
-            const DRY_RUN             = process.env.DRY_RUN === 'true';
+            const DRY_RUN             = isTrue(process.env.DRY_RUN);
             const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
             const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY || '').trim()) ? process.env.OVERRIDE_DAY.trim() : '';
             const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
             const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
             const TREND_WEEKS         = 4;
             const DIGEST_MAX_WEEKS    = 8; // more week columns don't fit the digest's 760px layout
-            const HOURS_LEAGUE        = process.env.HOURS_LEAGUE === 'true';
+            const HOURS_LEAGUE        = isTrue(process.env.HOURS_LEAGUE);
             const LEAGUE_PENALTY      = unset(process.env.HOURS_LEAGUE_PENALTY);
             const LEAGUE_WEEKS        = 6; // weeks in one overview, and overviews in one score
             const LEAGUE_DOC          = 'hours-league';
