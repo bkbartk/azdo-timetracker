@@ -1120,13 +1120,15 @@ jobs:
               const transporter = nodemailer.createTransport(transportOptions);
 
               // Hours league: the digest run computes and saves this week's overview; a
-              // personal-only run (say, Monday before Tuesday's digest) shows the latest saved one.
+              // personal-only run (say, Monday before Tuesday's digest) shows the latest saved one,
+              // or computes this week's (without saving) when nothing is saved yet.
               let league = null;
               if (useLeague) {
-                const doc   = (await fetchDocument(LEAGUE_DOC)) || {};
-                const saved = doc.overviews || {};
-                const key   = sendDigest ? startStr : Object.keys(saved).filter(k => k <= startStr).sort().pop();
-                if (key) league = computeLeague(enabledUsers, allEntries, saved, new Date(key + 'T00:00:00'), sendDigest);
+                const doc      = (await fetchDocument(LEAGUE_DOC)) || {};
+                const saved    = doc.overviews || {};
+                const savedKey = Object.keys(saved).filter(k => k <= startStr).sort().pop();
+                const live     = sendDigest || !savedKey;
+                league = computeLeague(enabledUsers, allEntries, saved, new Date((live ? startStr : savedKey) + 'T00:00:00'), live);
                 if (league) {
                   for (const r of league.rows) {
                     console.log(`League wk ${league.weekNo}: #${r.position} ${r.user.userName}  ${r.score} (this overview ${r.latest})` +
