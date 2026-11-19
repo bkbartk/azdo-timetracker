@@ -651,23 +651,15 @@ ${deleted.length ? `
 // gets HOURS_LEAGUE_PENALTY (say, "dishes duty") when that comes round.
 //
 // Each overview is saved in the LEAGUE_DOC document when the digest goes out,
-// so later edits can't change it. Overviews from before the league started
-// are rebuilt from when entries were created (hours edited afterwards can't
-// be seen there, so those are a close approximation).
-
-/** When an entry was created; old entries fall back to their id (Date.now() at creation). */
-function entryCreatedAt(entry) {
-  if (entry.createdAt) return entry.createdAt;
-  const ms = Number(entry.id);
-  return ms > 1e12 ? new Date(ms).toISOString() : '';
-}
+// so later edits can't change it. Overviews from before someone was in the
+// league (its start, or joining later) count as full marks: a fresh start
+// for everyone, which evens out once real overviews replace them.
 
 /** One overview's points for a user: the LEAGUE_WEEKS weeks up to lastMonday's, each % of target capped at 100. */
-function overviewPoints(user, entries, lastMonday, createdBefore) {
+function overviewPoints(user, entries, lastMonday) {
   return getTrendWeeks(lastMonday, LEAGUE_WEEKS).reduce((sum, w) => {
     const hours = entries
-      .filter(e => e.userId === user.userId && e.date >= w.start && e.date <= w.end &&
-                   (!createdBefore || entryCreatedAt(e) < createdBefore))
+      .filter(e => e.userId === user.userId && e.date >= w.start && e.date <= w.end)
       .reduce((s, e) => s + (Number(e.hours) || 0), 0);
     return sum + Math.min(100, Math.round((hours / user.targetHours) * 100));
   }, 0);
@@ -683,31 +675,27 @@ function diceRoll(seed, userId) {
 /**
  * Standings after the overview for the week starting lastMonday. With `live`
  * that overview is computed from the current entries (the digest run);
- * otherwise the saved one is used. Overviews missing from `saved` are rebuilt.
- * Rows are best first; the loser (lowest score, then lowest latest overview,
- * then the dice) is always last. `overviews` is `saved` plus what was computed.
+ * otherwise the saved one is used. Overviews missing from `saved` count as
+ * full marks (not saved). Rows are best first; the loser (lowest score, then
+ * lowest latest overview, then the dice) is always last. `overviews` is
+ * `saved` plus the live overview.
  */
-function computeLeague(users, entries, saved, lastMonday, live, now) {
+function computeLeague(users, entries, saved, lastMonday, live) {
   const players = users.filter(u => Number(u.targetHours) > 0);
   if (!players.length) return null;
-  // Rebuilt overviews count what existed at the same point in the following week as now
-  const sendOffset = now - new Date(mondayOf(toDateStr(now)) + 'T00:00:00');
-  const overviews  = Object.assign({}, saved);
-  const rows       = players.map(user => ({ user, score: 0, latest: 0 }));
+  const overviews = Object.assign({}, saved);
+  const rows      = players.map(user => ({ user, score: 0, latest: 0 }));
   for (let k = LEAGUE_WEEKS - 1; k >= 0; k--) {
-    const monday = addDays(lastMonday, -7 * k);
-    const key    = toDateStr(monday);
-    const sentAt = new Date(addDays(monday, 7).getTime() + sendOffset).toISOString();
+    const key    = toDateStr(addDays(lastMonday, -7 * k));
     const points = Object.assign({}, saved[key] || {});
     for (const r of rows) {
       let pts = points[r.user.userId];
-      if (k === 0 && live)           pts = overviewPoints(r.user, entries, monday, null);
-      else if (typeof pts !== 'number') pts = overviewPoints(r.user, entries, monday, sentAt);
-      points[r.user.userId] = pts;
+      if (k === 0 && live) pts = points[r.user.userId] = overviewPoints(r.user, entries, lastMonday);
+      if (typeof pts !== 'number') pts = LEAGUE_WEEKS * 100;
       r.score += pts;
       if (k === 0) r.latest = pts;
     }
-    overviews[key] = points;
+    if (Object.keys(points).length) overviews[key] = points;
   }
 
   rows.sort((a, b) => (b.score - a.score) || (b.latest - a.latest) ||
@@ -1001,8 +989,8 @@ async function main() {
   if (sendDigest)   ranges.push([weeks[0].monday, end]);
   if (sendDaily)    ranges.push([new Date(dailyDays[0] + 'T00:00:00'), dailyDay]);
   const useLeague = HOURS_LEAGUE && (sendPersonal || sendDigest);
-  // The oldest overview in a score starts LEAGUE_WEEKS - 1 weeks before the oldest overview's last week
-  if (useLeague)    ranges.push([addDays(start, -7 * (2 * LEAGUE_WEEKS - 2)), end]);
+  // The live overview covers LEAGUE_WEEKS weeks up to last week
+  if (useLeague)    ranges.push([addDays(start, -7 * (LEAGUE_WEEKS - 1)), end]);
   const monthKeys = getMonthKeysForRange(
     new Date(Math.min(...ranges.map(r => r[0]))), new Date(Math.max(...ranges.map(r => r[1]))));
   let allEntries = [];
@@ -1046,7 +1034,7 @@ async function main() {
     const doc   = (await fetchDocument(LEAGUE_DOC)) || {};
     const saved = doc.overviews || {};
     const key   = sendDigest ? startStr : Object.keys(saved).filter(k => k <= startStr).sort().pop();
-    if (key) league = computeLeague(enabledUsers, allEntries, saved, new Date(key + 'T00:00:00'), sendDigest, now);
+    if (key) league = computeLeague(enabledUsers, allEntries, saved, new Date(key + 'T00:00:00'), sendDigest);
     if (league) {
       for (const r of league.rows) {
         console.log(`League wk ${league.weekNo}: #${r.position} ${r.user.userName}  ${r.score} (this overview ${r.latest})` +
