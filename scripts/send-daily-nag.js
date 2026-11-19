@@ -9,6 +9,10 @@
  * Extension Data REST API used by send-weekly-summary.js.
  *
  * Required environment variables:
+ *   SYSTEM_ACCESSTOKEN map $(System.AccessToken) in the pipeline: the pipeline's own
+ *                     identity reads Extension Data. The collection URL comes from
+ *                     System.CollectionUri.
+ *     or, outside a pipeline or when that identity lacks access:
  *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
  *   AZDO_PAT          Personal Access Token (needs vso.extension.data scope)
  *   SLACK_BOT_TOKEN   Slack bot token (xoxb-…) with scopes:
@@ -32,8 +36,13 @@ const { WebClient } = require('@slack/web-api');
 // Config
 // ---------------------------------------------------------------------------
 
-const AZDO_SERVER_URL   = (process.env.AZDO_SERVER_URL || '').replace(/\/$/, '');
-const AZDO_PAT          = process.env.AZDO_PAT || '';
+// Server and credentials: a pipeline run needs none of these set. The collection URL
+// comes from System.CollectionUri and the pipeline's own identity ($(System.AccessToken),
+// mapped to SYSTEM_ACCESSTOKEN) is used unless a PAT is given.
+const unset = v => (v || '').replace(/^\$\(.*\)$/, '').trim();
+const AZDO_SERVER_URL   = (unset(process.env.AZDO_SERVER_URL) || unset(process.env.SYSTEM_COLLECTIONURI)).replace(/\/$/, '');
+const AZDO_PAT          = unset(process.env.AZDO_PAT);
+const AZDO_TOKEN        = unset(process.env.SYSTEM_ACCESSTOKEN);
 // Strip unresolved Azure Pipelines variable syntax "$(VAR)" so JS defaults kick in
 const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
 const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
@@ -59,7 +68,7 @@ const EXCLUDE_EMAILS = new Set(
     .filter(Boolean)
 );
 
-const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SLACK_BOT_TOKEN'];
+const REQUIRED_VARS = ['SLACK_BOT_TOKEN'];
 
 // ---------------------------------------------------------------------------
 // Date helpers  (toDateStr / formatDisplayDate copied from send-weekly-summary.js)
@@ -107,7 +116,7 @@ function getMonthKey(dateStr) {
 // ---------------------------------------------------------------------------
 
 function authHeader() {
-  return 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64');
+  return AZDO_PAT ? 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64') : 'Bearer ' + AZDO_TOKEN;
 }
 
 function extDataBase() {
@@ -194,6 +203,8 @@ function buildMessage(user, targetDate) {
 
 async function main() {
   const missing = REQUIRED_VARS.filter(v => !process.env[v]);
+  if (!AZDO_SERVER_URL)         missing.unshift('AZDO_SERVER_URL (or SYSTEM_COLLECTIONURI)');
+  if (!AZDO_PAT && !AZDO_TOKEN) missing.unshift('SYSTEM_ACCESSTOKEN (map $(System.AccessToken)) or AZDO_PAT');
   if (missing.length) {
     console.error('Missing required environment variables:', missing.join(', '));
     process.exit(1);

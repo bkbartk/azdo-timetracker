@@ -9,8 +9,11 @@
 # on weekends; the weekend-skipping for the *target* day is handled in code.
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
-#   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
-#   AZDO_PAT           Personal Access Token — vso.extension.data scope  [SECRET]
+#   AZDO_SERVER_URL    (optional) defaults to this collection (System.CollectionUri)
+#   AZDO_PAT           (optional) PAT — vso.extension.data scope [SECRET]
+#                      Leave unset: the pipeline uses its own identity (System.AccessToken).
+#                      That identity (Project Collection Build Service) needs read access
+#                      to Extension Data; give it a PAT here if it gets HTTP 401/403.
 #   SLACK_BOT_TOKEN    Slack bot token xoxb-…                            [SECRET]
 #   AZDO_PUBLISHER     miguelnicolas                    (default, change if forked)
 #   AZDO_EXTENSION_ID  timetracker-extension            (default, use -dev for dev)
@@ -62,6 +65,7 @@ steps:
     env:
       AZDO_SERVER_URL:      $(AZDO_SERVER_URL)
       AZDO_PAT:             $(AZDO_PAT)
+      SYSTEM_ACCESSTOKEN:   $(System.AccessToken)
       AZDO_PUBLISHER:       $(AZDO_PUBLISHER)
       AZDO_EXTENSION_ID:    $(AZDO_EXTENSION_ID)
       SLACK_BOT_TOKEN:      $(SLACK_BOT_TOKEN)

@@ -187,8 +187,8 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 
 | Variable | Example | Secret |
 |----------|---------|--------|
-| `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
-| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope, plus Work Items (Read) for the deleted-work-item check)_ | ✓ |
+| `AZDO_SERVER_URL` | _(optional, defaults to the collection the pipeline runs in)_ | |
+| `AZDO_PAT` | _(optional, see below)_ | ✓ |
 | `SMTP_HOST` | `mail-relay.company.com` | |
 | `SMTP_FROM` | `timetracker@company.com` | |
 | `SMTP_PORT` | `25` _(optional, default 25)_ | |
@@ -196,8 +196,14 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 | `SMTP_USER` | _(optional, only if SMTP requires auth)_ | |
 | `SMTP_PASS` | _(optional)_ | ✓ |
 | `TIMETRACKER_URL` | _(optional — link in the daily reminder)_ | |
+| `HOURS_LEAGUE` | _(optional, `true` turns on the hours league: per week the % of target counts as points, capped at 100, over 6 overviews of 6 weeks. Everyone sees their own score, position and the team average in the weekly mail; the digest shows the full standings. Each digest's overview is saved, so the pipeline identity (or PAT) then needs to write Extension Data)_ | |
+| `HOURS_LEAGUE_PENALTY` | _(optional, what last place gets, e.g. `dishes duty`; shown in last place's mail and the digest)_ | |
 
-> **Creating the PAT:**
+> **Credentials:** no PAT is needed. The pipeline maps `$(System.AccessToken)` and runs as its own identity
+> (*Project Collection Build Service*). If a run fails with HTTP 401/403 on Extension Data, check that
+> *Limit job authorization scope to current project* is off for the project, or fall back to a PAT:
+>
+> **Creating a PAT (fallback only):**
 > 1. Go to **User settings → Personal Access Tokens → New Token**
 > 2. Click **Show all scopes**, then find **Extensions** and tick **Extension Data → Read**
 >    — "Extension Data" is the storage service; "Extensions" (without Data) is for marketplace management and is not needed
@@ -244,12 +250,12 @@ Same as the weekly summary, but choose **Existing Azure Pipelines YAML file** �
 
 ### 3. Set pipeline variables
 
-In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**. (`AZDO_SERVER_URL` / `AZDO_PAT` are the same as the weekly summary — the PAT needs the `vso.extension.data` scope.)
+In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**. (`AZDO_SERVER_URL` / `AZDO_PAT` are optional, the same as for the weekly summary: by default the pipeline's own identity is used.)
 
 | Variable | Example | Secret |
 |----------|---------|--------|
-| `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
-| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope)_ | ✓ |
+| `AZDO_SERVER_URL` | _(optional, defaults to the collection the pipeline runs in)_ | |
+| `AZDO_PAT` | _(optional PAT, `vso.extension.data` scope)_ | ✓ |
 | `SLACK_BOT_TOKEN` | `xoxb-…` | ✓ |
 | `TIMETRACKER_URL` | `https://devops.company.com/.../_apis/.../My Time` _(optional link in the message)_ | |
 | `HOLIDAYS` | `2026-12-25,2026-12-26` _(optional, CSV of non-working days)_ | |
