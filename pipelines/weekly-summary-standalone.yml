@@ -389,6 +389,21 @@ jobs:
             // ---------------------------------------------------------------------------
 
             /**
+             * A date as YYYY-MM-DD. DevOps Server can return the recycle bin's deletedDate
+             * in the server's locale ("16-11-2026 10:23:45") instead of ISO, which then
+             * compares wrong against YYYY-MM-DD strings.
+             */
+            function toIsoDate(v) {
+              const s = String(v || '').trim();
+              let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+              if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+              m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/); // day first (dd-mm-yyyy), as on this server's locale
+              if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+              const d = new Date(s);
+              return isNaN(d.getTime()) ? null : toDateStr(d);
+            }
+
+            /**
              * Work items with hours logged on them that no longer exist. Each deleted one
              * is looked up in its project's recycle bin for who deleted it and when.
              * Needs Work Items (Read) on the PAT; without it, falls back to the entries
@@ -422,7 +437,7 @@ jobs:
                     .catch(err => { console.warn(`Recycle bin lookup failed for #${id}: ${err.message}`); return null; });
                   if (d) gone.set(id, {
                     deletedBy:   String(d.deletedBy || '').replace(/\s*<[^>]*>\s*$/, '') || null, // "Name <DOMAIN\user>" -> "Name"
-                    deletedDate: d.deletedDate ? String(d.deletedDate).slice(0, 10) : null,
+                    deletedDate: toIsoDate(d.deletedDate),
                   });
                 }
               } catch (err) {
@@ -431,7 +446,7 @@ jobs:
                 gone.clear();
                 for (const [id, list] of byId) {
                   const flagged = list.find(e => e.workItemDeletedBy);
-                  if (flagged) gone.set(id, { deletedBy: flagged.workItemDeletedBy, deletedDate: flagged.workItemDeletedDate || null });
+                  if (flagged) gone.set(id, { deletedBy: flagged.workItemDeletedBy, deletedDate: toIsoDate(flagged.workItemDeletedDate) });
                 }
               }
 
