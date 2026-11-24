@@ -37,7 +37,8 @@
 #   override_week_start   Monday date YYYY-MM-DD  — use any past week for testing
 #   dry_run               true                    — log output, do NOT send emails
 #   override_day          YYYY-MM-DD              — send the daily reminder for this day now
-#   mails                 all | personal | digest | daily — limit a test run to one kind of mail
+#   mails                 all | personal | digest | daily — limit a test run to one kind of mail;
+#                         league — only print the saved hours league overviews, send nothing
 
 parameters:
   - name: override_week_start
@@ -55,8 +56,8 @@ parameters:
   - name: mails
     type: string
     default: all
-    values: [all, personal, digest, daily]
-    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder)'
+    values: [all, personal, digest, daily, league]
+    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder; league = only print the saved hours league)'
 
 schedules:
   - cron: "0 * * * *"
@@ -126,7 +127,8 @@ jobs:
              *   SMTP_USER         SMTP auth username   (default: none)
              *   SMTP_PASS         SMTP auth password   (default: none)
              *   DRY_RUN           true = log only, no emails sent (default: false)
-             *   MAILS             all | personal | digest | daily — which mails a run may send (default: all)
+             *   MAILS             all | personal | digest | daily — which mails a run may send (default: all);
+             *                     league = only print the saved hours league overviews, send nothing
              *   OVERRIDE_DAY      YYYY-MM-DD — send the daily reminder for this day now, ignoring its schedule
              *   TIMETRACKER_URL   Link added to the daily reminder (default: none)
              *   HOURS_LEAGUE      true = add the hours league to the personal mails and the digest
@@ -165,7 +167,7 @@ jobs:
             const DRY_RUN             = isTrue(process.env.DRY_RUN);
             const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
             const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY || '').trim()) ? process.env.OVERRIDE_DAY.trim() : '';
-            const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
+            const MAILS               = ['personal', 'digest', 'daily', 'league'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
             const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
             const TREND_WEEKS         = 4;
             const DIGEST_MAX_WEEKS    = 8; // more week columns don't fit the digest's 760px layout
@@ -629,12 +631,6 @@ jobs:
               const weeks = [];
               for (let i = count - 1; i >= 0; i--) {
                 const monday = addDays(lastWeekStart, -7 * i);
-                weeks.push({ monday, start: toDateStr(monday), end: toDateStr(addDays(monday, 6)) });
-              }
-              return weeks;
-            }
-
-            /**
             '@
             $file = Join-Path $PWD 'send-weekly-summary.js'
             $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -646,6 +642,12 @@ jobs:
           targetType: inline
           script: |
             $part = @'
+                weeks.push({ monday, start: toDateStr(monday), end: toDateStr(addDays(monday, 6)) });
+              }
+              return weeks;
+            }
+
+            /**
              * One row per user: hours per trend week, plus the weekdays of the last week
              * with nothing logged. Sorted worst first, so the people to talk to are on top;
              * users without a target go last.
@@ -837,6 +839,23 @@ jobs:
                 average: Math.round(rows.reduce((s, r) => s + r.score, 0) / rows.length),
                 overviews,
               };
+            }
+
+            /** MAILS=league: print the saved overviews (week by week, points per person), send nothing. */
+            async function printSavedLeague(config) {
+              const doc       = (await fetchDocument(LEAGUE_DOC)) || {};
+              const overviews = doc.overviews || {};
+              const names     = {};
+              for (const u of asArray(config && config.users)) names[u.userId] = u.userName;
+              const keys = Object.keys(overviews).sort();
+              console.log(`League: ${keys.length} saved overview(s).`);
+              for (const key of keys) {
+                const monday = new Date(key + 'T00:00:00');
+                console.log(`Week ${isoWeek(monday)} (starts ${key}):`);
+                for (const [userId, pts] of Object.entries(overviews[key])) {
+                  console.log(`  ${String(pts).padStart(4)}  ${names[userId] || userId}`);
+                }
+              }
             }
 
             const LEAGUE_RULES =
@@ -1093,7 +1112,23 @@ jobs:
                 config.users = asArray(config.users).map(u => Object.assign({}, u, { daySchedule: u.daySchedule ? asArray(u.daySchedule) : null }));
                 if (config.dailyReminder && config.dailyReminder.utcDays) config.dailyReminder.utcDays = asArray(config.dailyReminder.utcDays);
               }
+
+              if (MAILS === 'league') {
+                await printSavedLeague(config);
+                return;
+              }
               console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
+            '@
+            $file = Join-Path $PWD 'send-weekly-summary.js'
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::AppendAllText($file, $part + "`n", $utf8)
+      - task: PowerShell@2
+        displayName: Write script to disk (3/3)
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $part = @'
               console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
               console.log(`[DEBUG] config.managerDigest: ${JSON.stringify((config && config.managerDigest) || null)}`);
               console.log(`[DEBUG] config.dailyReminder: ${JSON.stringify((config && config.dailyReminder) || null)}`);
@@ -1108,17 +1143,6 @@ jobs:
               // Schedule checks are skipped for a manual test run: OVERRIDE_WEEK_START for
               // the weekly summary and digest, OVERRIDE_DAY for the daily reminder.
               const now = new Date();
-            '@
-            $file = Join-Path $PWD 'send-weekly-summary.js'
-            $utf8 = New-Object System.Text.UTF8Encoding $false
-            [System.IO.File]::AppendAllText($file, $part + "`n", $utf8)
-      - task: PowerShell@2
-        displayName: Write script to disk (3/3)
-        inputs:
-          pwsh: false
-          targetType: inline
-          script: |
-            $part = @'
               // The sent log records the scheduled slot each mail last went out for, so a late
               // run catches up and a slot is never sent twice. Unreadable: on-time sends only.
               let sentLog = null;

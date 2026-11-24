@@ -32,7 +32,8 @@
  *   SMTP_USER         SMTP auth username   (default: none)
  *   SMTP_PASS         SMTP auth password   (default: none)
  *   DRY_RUN           true = log only, no emails sent (default: false)
- *   MAILS             all | personal | digest | daily — which mails a run may send (default: all)
+ *   MAILS             all | personal | digest | daily — which mails a run may send (default: all);
+ *                     league = only print the saved hours league overviews, send nothing
  *   OVERRIDE_DAY      YYYY-MM-DD — send the daily reminder for this day now, ignoring its schedule
  *   TIMETRACKER_URL   Link added to the daily reminder (default: none)
  *   HOURS_LEAGUE      true = add the hours league to the personal mails and the digest
@@ -71,7 +72,7 @@ const SMTP_PASS        = process.env.SMTP_PASS         || null;
 const DRY_RUN             = isTrue(process.env.DRY_RUN);
 const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
 const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY || '').trim()) ? process.env.OVERRIDE_DAY.trim() : '';
-const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
+const MAILS               = ['personal', 'digest', 'daily', 'league'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
 const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
 const TREND_WEEKS         = 4;
 const DIGEST_MAX_WEEKS    = 8; // more week columns don't fit the digest's 760px layout
@@ -734,6 +735,23 @@ function computeLeague(users, entries, saved, lastMonday, live) {
   };
 }
 
+/** MAILS=league: print the saved overviews (week by week, points per person), send nothing. */
+async function printSavedLeague(config) {
+  const doc       = (await fetchDocument(LEAGUE_DOC)) || {};
+  const overviews = doc.overviews || {};
+  const names     = {};
+  for (const u of asArray(config && config.users)) names[u.userId] = u.userName;
+  const keys = Object.keys(overviews).sort();
+  console.log(`League: ${keys.length} saved overview(s).`);
+  for (const key of keys) {
+    const monday = new Date(key + 'T00:00:00');
+    console.log(`Week ${isoWeek(monday)} (starts ${key}):`);
+    for (const [userId, pts] of Object.entries(overviews[key])) {
+      console.log(`  ${String(pts).padStart(4)}  ${names[userId] || userId}`);
+    }
+  }
+}
+
 const LEAGUE_RULES =
   `Each week's overview covers the last ${LEAGUE_WEEKS} weeks: per week you earn the % of your target ` +
   `you logged, up to 100. Your score adds up the last ${LEAGUE_WEEKS} overviews, so hours filled in late ` +
@@ -987,6 +1005,11 @@ async function main() {
   if (config) {
     config.users = asArray(config.users).map(u => Object.assign({}, u, { daySchedule: u.daySchedule ? asArray(u.daySchedule) : null }));
     if (config.dailyReminder && config.dailyReminder.utcDays) config.dailyReminder.utcDays = asArray(config.dailyReminder.utcDays);
+  }
+
+  if (MAILS === 'league') {
+    await printSavedLeague(config);
+    return;
   }
   console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
   console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);

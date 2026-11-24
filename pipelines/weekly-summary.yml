@@ -32,7 +32,8 @@
 #   override_week_start   Monday date YYYY-MM-DD  — use any past week for testing
 #   dry_run               true                    — log output, do NOT send emails
 #   override_day          YYYY-MM-DD              — send the daily reminder for this day now
-#   mails                 all | personal | digest | daily — limit a test run to one kind of mail
+#   mails                 all | personal | digest | daily — limit a test run to one kind of mail;
+#                         league — only print the saved hours league overviews, send nothing
 
 parameters:
   - name: override_week_start
@@ -50,8 +51,8 @@ parameters:
   - name: mails
     type: string
     default: all
-    values: [all, personal, digest, daily]
-    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder)'
+    values: [all, personal, digest, daily, league]
+    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder; league = only print the saved hours league)'
 
 schedules:
   - cron: "0 * * * *"

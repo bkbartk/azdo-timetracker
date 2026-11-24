@@ -227,7 +227,7 @@ Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
 | `override_week_start` | Any past Monday, e.g. `2026-05-06` |
 | `dry_run` | `true` — logs output without sending any emails |
 | `override_day` | Any past weekday, e.g. `2026-10-21` — sends the daily reminder for that day |
-| `mails` | `all` (default), `personal`, `digest` or `daily` — test only one kind of mail |
+| `mails` | `all` (default), `personal`, `digest` or `daily` — test only one kind of mail; `league` only prints the saved hours league overviews and sends nothing |
 
 ## Daily Slack Reminders — Setup
 
