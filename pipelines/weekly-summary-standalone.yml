@@ -7,6 +7,8 @@
 #
 # Runs every hour. The script reads the configured send day + time from the
 # Notification Settings page and exits if it is not the right moment.
+# A late run (busy agent) still sends a mail that hasn't gone out, up to 24 h after
+# its time; Extension Data document mail-sent-log keeps it from going out twice.
 # Change the schedule from Notification Settings — no YAML edits needed.
 # The same run also sends the Manager Digest (one team overview with a trend over
 # the daily reminder's look-back, 4 to 8 weeks) on its own day + time, and the Daily Reminder (weekday mornings, to
@@ -171,6 +173,8 @@ jobs:
             const LEAGUE_PENALTY      = unset(process.env.HOURS_LEAGUE_PENALTY);
             const LEAGUE_WEEKS        = 6; // weeks in one overview, and overviews in one score
             const LEAGUE_DOC          = 'hours-league';
+            const SENT_DOC            = 'mail-sent-log';
+            const CATCH_UP_HOURS      = 24; // a run this late still sends a mail that hasn't gone out
 
             const REQUIRED_VARS = ['SMTP_HOST', 'SMTP_FROM'];
 
@@ -994,20 +998,52 @@ jobs:
 
             /**
              * The pipeline runs hourly; the script decides whether it's send time.
-             * A schedule matches on its utcDay, or on any of its utcDays (daily reminder).
-             * A schedule without a UTC day/hour (saved by an old settings page) always matches.
+             * A schedule has a utcDay, or a list of utcDays (daily reminder), and a utcHour.
+             * Returns the latest scheduled send time at or before now, or null when the
+             * schedule has no UTC day/hour (saved by an old settings page: always send).
              */
-            function scheduleMatches(label, sched, now) {
+            function lastSlot(sched, now) {
               const days = sched && (sched.utcDays || (sched.utcDay !== undefined ? [sched.utcDay] : null));
-              if (!days || sched.utcHour === undefined) return true;
-              const curDay  = now.getUTCDay();
-              const curHour = now.getUTCHours();
-              if (!days.includes(curDay) || curHour !== sched.utcHour) {
-                console.log(`${label}: not send time. Configured: ${days.map(d => DAY_NAMES[d].slice(0, 3)).join('/')} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC.`);
-                return false;
+              if (!days || sched.utcHour === undefined) return null;
+              for (let i = 0; i < 8; i++) {
+                const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i, sched.utcHour));
+                if (d <= now && days.includes(d.getUTCDay())) return d;
               }
-              console.log(`${label}: schedule matched — proceeding.`);
-              return true;
+              return null;
+            }
+
+            /**
+             * Whether a mail is due. A run that starts late (agent busy, earlier run hung)
+             * still sends, up to CATCH_UP_HOURS after the scheduled time, as long as the
+             * sent log doesn't already have that slot. Without a readable sent log only
+             * the scheduled hour itself counts, as before.
+             * Returns { due, slot, late }.
+             */
+            function checkSchedule(label, sched, now, sentLog, key) {
+              const days = sched && (sched.utcDays || (sched.utcDay !== undefined ? [sched.utcDay] : null));
+              if (!days || sched.utcHour === undefined) return { due: true, slot: null, late: false };
+              const fmt  = d => `${DAY_NAMES[d.getUTCDay()]} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')} UTC`;
+              const slot = lastSlot(sched, now);
+              const age  = slot ? (now - slot) / 3600000 : Infinity;
+              const sentAt = sentLog && sentLog[key];
+              const configured = `Configured: ${days.map(d => DAY_NAMES[d].slice(0, 3)).join('/')} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${fmt(now)}.`;
+              if (slot && sentAt && sentAt >= slot.toISOString()) {
+                console.log(`${label}: already sent for ${fmt(slot)} (at ${sentAt}). ${configured}`);
+                return { due: false, slot, late: false };
+              }
+              if (age < 1) {
+                console.log(`${label}: schedule matched, proceeding.`);
+                return { due: true, slot, late: false };
+              }
+              // A mail not in the log yet (first run with the log) only catches up today's slot,
+              // so one that already went out before the log existed isn't sent again.
+              const catchUp = sentLog && age < CATCH_UP_HOURS && (sentAt || slot.toISOString().slice(0, 10) === now.toISOString().slice(0, 10));
+              if (catchUp) {
+                console.log(`${label}: run is ${age.toFixed(1)} h late for ${fmt(slot)} and it was not sent yet, sending now.`);
+                return { due: true, slot, late: true };
+              }
+              console.log(`${label}: not send time. ${configured}`);
+              return { due: false, slot, late: false };
             }
 
             async function main() {
@@ -1061,13 +1097,34 @@ jobs:
               // Schedule checks are skipped for a manual test run: OVERRIDE_WEEK_START for
               // the weekly summary and digest, OVERRIDE_DAY for the daily reminder.
               const now = new Date();
+              // The sent log records the scheduled slot each mail last went out for, so a late
+              // run catches up and a slot is never sent twice. Unreadable: on-time sends only.
+              let sentLog = null;
+              try { sentLog = (await fetchDocument(SENT_DOC)) || {}; }
+              catch (err) { console.warn(`Sent log: could not read it, only sending at the scheduled hour: ${err.message}`); }
+              const checks = {};
               if (!OVERRIDE_WEEK_START) {
-                sendPersonal = sendPersonal && scheduleMatches('Weekly summary', config && config.schedule, now);
-                sendDigest   = sendDigest   && scheduleMatches('Manager digest', digestCfg, now);
+                if (sendPersonal) checks.personal = checkSchedule('Weekly summary', config && config.schedule, now, sentLog, 'personal');
+                if (sendDigest)   checks.digest   = checkSchedule('Manager digest', digestCfg, now, sentLog, 'digest');
               }
-              if (!OVERRIDE_DAY) {
-                sendDaily = sendDaily && scheduleMatches('Daily reminder', dailyCfg, now);
+              if (!OVERRIDE_DAY && sendDaily) {
+                checks.daily = checkSchedule('Daily reminder', dailyCfg, now, sentLog, 'daily');
               }
+              // Record the slots before sending. If that fails, late mails are skipped
+              // (they could otherwise go out again every hour); on-time ones still go.
+              const toLog = Object.entries(checks).filter(([, c]) => c.due && c.slot);
+              if (toLog.length && sentLog && !DRY_RUN) {
+                const updated = Object.assign({}, sentLog);
+                for (const [k, c] of toLog) updated[k] = c.slot.toISOString();
+                try { await saveDocument(SENT_DOC, updated); console.log('Sent log: updated.'); }
+                catch (err) {
+                  console.warn(`Sent log: could not save it (the pipeline identity or PAT needs Extension Data write), skipping late mails: ${err.message}`);
+                  for (const c of Object.values(checks)) if (c.late) c.due = false;
+                }
+              }
+              if (checks.personal) sendPersonal = checks.personal.due;
+              if (checks.digest)   sendDigest   = checks.digest.due;
+              if (checks.daily)    sendDaily    = checks.daily.due;
               if (!sendPersonal && !sendDigest && !sendDaily) {
                 console.log('Nothing to do.');
                 return;
@@ -1081,7 +1138,8 @@ jobs:
               }
               console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
 
-              const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(now);
+              // A late run still reminds about the working day before the scheduled send
+              const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(checks.daily && checks.daily.slot || now);
               const lookback  = Math.max(1, parseInt(dailyCfg.lookbackDays, 10) || 1);
               const dailyDays = getWorkingDaysBack(dailyDay, lookback);
               // The digest and its follow-up reach back the same number of working days as the daily

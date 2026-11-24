@@ -2,6 +2,8 @@
 #
 # Runs every hour. The script reads the send day + time from Notification Settings
 # in the extension and exits immediately if it is not the configured send hour.
+# A late run (busy agent) still sends a mail that hasn't gone out, up to 24 h after
+# its time; Extension Data document mail-sent-log keeps it from going out twice.
 # Change the schedule entirely from the Notification Settings page — no YAML edits needed.
 # The same run also sends the Manager Digest (one team overview with a 4-week
 # trend) on its own day + time, and the Daily Reminder (weekday mornings, to

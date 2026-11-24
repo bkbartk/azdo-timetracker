@@ -214,7 +214,7 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 
 ### 4. Configure the schedule
 
-The send day and time are configured entirely from the **Notification Settings** page — no YAML edits needed. The pipeline runs hourly; the script checks the configured day + time and exits immediately if it is not the right moment.
+The send day and time are configured entirely from the **Notification Settings** page — no YAML edits needed. The pipeline runs hourly; the script checks the configured day + time and exits immediately if it is not the right moment. A run that starts late (busy build agent) still sends a mail that hasn't gone out yet, up to 24 hours after its time; the document `mail-sent-log` in Extension Data records what went out, so nothing is sent twice. That needs Extension Data write for the pipeline identity or PAT; without it only on-time runs send.
 
 The settings page shows the time in your **local browser timezone** and displays the equivalent UTC value for reference.
 
