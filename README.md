@@ -179,7 +179,7 @@ Use the self-contained single-file version that embeds the script inside the YAM
 3. Go to **Pipelines → New pipeline** → select that new repo → choose the file
 4. Click **Save** (do not run yet)
 
-> When the script logic changes in a future extension update, copy the new `weekly-summary-standalone.yml` over and commit. The schedule, variables, and parameters stay the same — only the embedded script changes.
+> When the script logic changes in a future extension update, copy the new `weekly-summary-standalone.yml` over and commit. The schedule, variables, and parameters stay the same — only the embedded script changes. After changing `scripts/send-weekly-summary.js`, run `node scripts/make-standalone.js` to copy it into the standalone file (it is split over several steps, as one inline PowerShell script may hold at most 32766 characters).
 
 ### 3. Set pipeline variables
 

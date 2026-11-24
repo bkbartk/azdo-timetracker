@@ -86,12 +86,12 @@ jobs:
         displayName: Install nodemailer
 
       - task: PowerShell@2
-        displayName: Write script to disk
+        displayName: Write script to disk (1/3)
         inputs:
           pwsh: false
           targetType: inline
           script: |
-            $script = @'
+            $part = @'
             'use strict';
 
             /**
@@ -635,6 +635,17 @@ jobs:
             }
 
             /**
+            '@
+            $file = Join-Path $PWD 'send-weekly-summary.js'
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($file, $part + "`n", $utf8)
+      - task: PowerShell@2
+        displayName: Write script to disk (2/3)
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $part = @'
              * One row per user: hours per trend week, plus the weekdays of the last week
              * with nothing logged. Sorted worst first, so the people to talk to are on top;
              * users without a target go last.
@@ -1097,6 +1108,17 @@ jobs:
               // Schedule checks are skipped for a manual test run: OVERRIDE_WEEK_START for
               // the weekly summary and digest, OVERRIDE_DAY for the daily reminder.
               const now = new Date();
+            '@
+            $file = Join-Path $PWD 'send-weekly-summary.js'
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::AppendAllText($file, $part + "`n", $utf8)
+      - task: PowerShell@2
+        displayName: Write script to disk (3/3)
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $part = @'
               // The sent log records the scheduled slot each mail last went out for, so a late
               // run catches up and a slot is never sent twice. Unreadable: on-time sends only.
               let sentLog = null;
@@ -1439,8 +1461,9 @@ jobs:
               process.exit(1);
             });
             '@
-            $script | Out-File -FilePath send-weekly-summary.js -Encoding utf8
-    
+            $file = Join-Path $PWD 'send-weekly-summary.js'
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::AppendAllText($file, $part + "`n", $utf8)
       - script: node send-weekly-summary.js
         displayName: Send weekly hour summary emails
         env:
