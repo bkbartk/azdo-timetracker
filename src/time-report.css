@@ -177,3 +177,6 @@ td { padding: 12px 16px; color: var(--text-primary); }
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* Entries imported from Hera: code + project, small under the epic */
+.hera-line { margin-top: 2px; font-size: 11px; color: var(--text-secondary); }

@@ -43,6 +43,10 @@
       <label>Work Item</label>
       <div class="ms" id="workItemFilter" data-all="All Work Items"></div>
     </div>
+    <div class="filter-group" style="display:none">
+      <label>Hera</label>
+      <div class="ms" id="heraFilter" data-all="All Entries"></div>
+    </div>
     <div class="btn-group">
       <button class="icon-btn toolbar-btn" onclick="clearFilters()" title="Clear filters" aria-label="Clear filters">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon><line x1="16" y1="16" x2="22" y2="22"></line><line x1="22" y1="16" x2="16" y2="22"></line></svg>
@@ -400,7 +404,7 @@
       var params = {};
       if (raw.startdate) params.dateFrom = decodeURIComponent(raw.startdate);
       if (raw.enddate)   params.dateTo   = decodeURIComponent(raw.enddate);
-      ["user", "epic", "project", "client", "tag", "workitem"].forEach(function(k) {
+      ["user", "epic", "project", "client", "tag", "workitem", "hera"].forEach(function(k) {
         if (raw[k]) params[k] = list(raw[k]);
       });
       return Object.keys(params).length ? params : null;
@@ -412,7 +416,7 @@
       var dateTo   = document.getElementById("dateTo").value;
       if (dateFrom) parts.push("startdate=" + encodeURIComponent(dateFrom));
       if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
-      [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"],["workItemFilter","workitem"]].forEach(function(pair) {
+      [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"],["workItemFilter","workitem"],["heraFilter","hera"]].forEach(function(pair) {
         var v = msGetValues(pair[0]);
         if (v === null) { if (pair[1] === "user") parts.push("user=*"); }
         else if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
@@ -807,6 +811,22 @@
       var wiOpts = Object.keys(workItems).map(function(id) { return { value: id, label: (workItems[id] || '(untitled)') + ' (#' + id + ')' }; })
         .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
       setGroup("workItemFilter", wiOpts, "workitem", wiOpts.length > 0);
+
+      // Hera codes of imported entries (see heraLine); only shown when there are any
+      var heraCodes = {};
+      allEntries.forEach(function(e) { if (e.hera && e.hera.code) heraCodes[e.hera.code] = e.hera.project || ''; });
+      var heraOpts = Object.keys(heraCodes).sort().map(function(c) { return { value: c, label: c + ' ' + heraCodes[c] }; });
+      if (heraOpts.length) heraOpts.push({ value: HERA_NONE, label: '(Not from Hera)' });
+      setGroup("heraFilter", heraOpts, "hera", heraOpts.length > 0);
+    }
+
+    // Entries imported from Hera, the previous time tracking tool, carry
+    // e.hera = { code, project, ... } (written by the one-off import script).
+    var HERA_NONE = '__none__';
+    function heraLine(e) {
+      if (!e.hera || !e.hera.code) return '';
+      return '<div class="hera-line" title="Imported from Hera">Hera ' + escapeHtml(e.hera.code) +
+        (e.hera.project ? ' &middot; ' + escapeHtml(e.hera.project) : '') + '</div>';
     }
 
     function applyFilters() {
@@ -824,6 +844,7 @@
       var projects = set("projectFilter");
       var clients = set("clientFilter");
       var workItemSet = set("workItemFilter");
+      var heraSet = set("heraFilter");
       var tagValues = msGetValues("tagFilter");
       var tags = tagValues && tagValues.map(function(t) { return t.toLowerCase(); });
 
@@ -835,6 +856,7 @@
         if (projects && !projects[e.project || "(No Project)"]) return false;
         if (clients && !clients[e.client || "(No Client)"]) return false;
         if (workItemSet && !workItemSet[String(e.workItemId)]) return false;
+        if (heraSet && !heraSet[e.hera && e.hera.code ? e.hera.code : HERA_NONE]) return false;
         if (tags) {
           var entryTags = (e.tags || "").split(";").map(function(t) { return t.trim().toLowerCase(); });
           if (!tags.some(function(t) { return entryTags.indexOf(t) !== -1; })) return false;
@@ -849,7 +871,7 @@
 
     function clearFilters() {
       setDefaultDateRange();
-      ["epicFilter", "projectFilter", "clientFilter", "tagFilter", "workItemFilter"].forEach(function(id) {
+      ["epicFilter", "projectFilter", "clientFilter", "tagFilter", "workItemFilter", "heraFilter"].forEach(function(id) {
         document.getElementById(id)._ms.selected = null;
       });
       pendingFilters = { user: defaultUserSelection() };
@@ -950,7 +972,7 @@
           "<td>" + escapeHtml(e.userName) + "</td>" +
           "<td>" + escapeHtml(e.workItemTitle) + " (" + wiIdLabel + ")" + deletedBadge(e) + "</td>" +
           "<td>" + parentDisplay + "</td>" +
-          "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
+          "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + heraLine(e) + "</td>" +
           "<td>" + tags + "</td>" +
           "<td><strong>" + e.hours + "h</strong></td>" +
           "<td>" + (e.description ? escapeHtml(e.description) : "-") + "</td>" +
@@ -1279,9 +1301,10 @@
     }
 
     function exportEntriesCSV() {
-      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Parent ID", "Parent Title", "Parent Type", "Epic", "Project", "Client", "Tags", "Hours", "Description", "Created At", "Last Modified", "Modified At (all)", "Times Modified"];
+      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Parent ID", "Parent Title", "Parent Type", "Epic", "Project", "Client", "Tags", "Hours", "Description", "Created At", "Last Modified", "Modified At (all)", "Times Modified", "Hera Code", "Hera Project"];
       var rows = filteredEntries.map(function(e) {
         var mods = e.modifiedAt || [];
+        var hera = e.hera || {};
         return [
           e.date,
           e.userName,
@@ -1300,7 +1323,9 @@
           TC.entryCreatedAt(e),
           mods.length ? mods[mods.length - 1] : "",
           '"' + mods.join("; ") + '"',
-          mods.length
+          mods.length,
+          hera.code || "",
+          '"' + (hera.project || "").replace(/"/g, '""') + '"'
         ].join(",");
       });
       return headers.join(",") + "\n" + rows.join("\n");
