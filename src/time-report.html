@@ -812,9 +812,18 @@
         .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
       setGroup("workItemFilter", wiOpts, "workitem", wiOpts.length > 0);
 
-      // Hera codes of imported entries (see heraLine); only shown when there are any
+      // Hera codes of imported entries (see heraLine) within the selected
+      // dates: allEntries holds whole months, and the import only reaches a
+      // few days into recent months, so without the date check the filter
+      // would show up for weeks that have no imported entries at all.
+      var heraFrom = document.getElementById("dateFrom").value;
+      var heraTo = document.getElementById("dateTo").value;
       var heraCodes = {};
-      allEntries.forEach(function(e) { if (e.hera && e.hera.code) heraCodes[e.hera.code] = e.hera.project || ''; });
+      allEntries.forEach(function(e) {
+        if (!e.hera || !e.hera.code) return;
+        if ((heraFrom && e.date < heraFrom) || (heraTo && e.date > heraTo)) return;
+        heraCodes[e.hera.code] = e.hera.project || '';
+      });
       var heraOpts = Object.keys(heraCodes).sort().map(function(c) { return { value: c, label: c + ' ' + heraCodes[c] }; });
       if (heraOpts.length) heraOpts.push({ value: HERA_NONE, label: '(Not from Hera)' });
       setGroup("heraFilter", heraOpts, "hera", heraOpts.length > 0);
